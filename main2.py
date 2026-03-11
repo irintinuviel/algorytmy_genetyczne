@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import matplotlib
 
@@ -13,7 +14,7 @@ from matplotlib.animation import PillowWriter
 # =========================
 def rastrigin(x):
     x = np.array(x)
-    return 10 * len(x) + np.sum(x ** 2 - 10 * np.cos(2 * np.pi * x))
+    return 10 * len(x) + np.sum(x**2 - 10 * np.cos(2 * np.pi * x))
 
 
 def eggholder(x):
@@ -23,8 +24,13 @@ def eggholder(x):
     )
 
 
+def himmelblau(x):
+    x1, x2 = x
+    return (x1**2 + x2 - 11) ** 2 + (x1 + x2**2 - 7) ** 2
+
+
 # =========================
-# WSPOLNE NARZEDZIA - RUSZANIE NIE MA SENSU
+# WSPOLNE NARZEDZIA
 # =========================
 def make_surface(func, range_min, range_max, points=80):
     x = np.linspace(range_min, range_max, points)
@@ -54,9 +60,8 @@ def save_gif(history, func, X, Y, Z, filename="opt.gif", fps=10):
         for i, state in enumerate(history):
             pos = state["pos"]
             best = state["best"]
-
-            z_agents = np.array([func(p) for p in pos])
-            z_best = func(best)
+            z_agents = state["z_pos"]
+            z_best = state["z_best"]
 
             agents_scatter._offsets3d = (pos[:, 0], pos[:, 1], z_agents)
             best_scatter._offsets3d = ([best[0]], [best[1]], [z_best])
@@ -89,9 +94,8 @@ def show_interactive_plot(history, func, X, Y, Z, range_min, range_max):
         state = history[int(i)]
         pos = state["pos"]
         best = state["best"]
-
-        z_agents = np.array([func(p) for p in pos])
-        z_best = func(best)
+        z_agents = state["z_pos"]
+        z_best = state["z_best"]
 
         agents_scatter._offsets3d = (pos[:, 0], pos[:, 1], z_agents)
         best_scatter._offsets3d = ([best[0]], [best[1]], [z_best])
@@ -129,10 +133,41 @@ def show_interactive_plot(history, func, X, Y, Z, range_min, range_max):
     plt.show()
 
 
+def plot_convergence(history, algorithm_name, function_name):
+    best_values = [state["best_cost"] for state in history]
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(best_values)
+    plt.xlabel("Iteracja")
+    plt.ylabel("Najlepsza wartość funkcji")
+    plt.title(f"Zbieżność: {algorithm_name} / {function_name}")
+    plt.grid(True)
+    plt.show()
+
+
+def make_history_state(pos, best, best_cost, func):
+    return {
+        "pos": pos.copy(),
+        "best": best.copy(),
+        "best_cost": float(best_cost),
+        "z_pos": np.array([func(p) for p in pos]),
+        "z_best": float(best_cost),
+    }
+
+
 # =========================
 # ALGORYTMY
 # =========================
-def run_pso(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12), w=0.7, c1=1.5, c2=1.5):
+def run_pso(
+    func,
+    num=50,
+    iterations=100,
+    dim=2,
+    bounds=(-5.12, 5.12),
+    w=0.7,
+    c1=1.5,
+    c2=1.5,
+):
     range_min, range_max = bounds
 
     positions = np.random.uniform(range_min, range_max, (num, dim))
@@ -173,23 +208,21 @@ def run_pso(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12), w=0.7, c1
             gbest_cost = pbest_cost[best_index]
             gbest_position = pbest_positions[best_index].copy()
 
-        history.append(
-            {
-                "pos": positions.copy(),
-                "best": gbest_position.copy(),
-                "best_cost": gbest_cost,
-            }
-        )
+        history.append(make_history_state(positions, gbest_position, gbest_cost, func))
 
-    return history
+    return {
+        "history": history,
+        "best_position": gbest_position.copy(),
+        "best_cost": float(gbest_cost),
+    }
 
-# algorytm z czapy courtesy of OpenAI
+
 def run_random_search(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
     range_min, range_max = bounds
 
     positions = np.random.uniform(range_min, range_max, (num, dim))
-
     costs = np.array([func(p) for p in positions])
+
     best_idx = np.argmin(costs)
     best = positions[best_idx].copy()
     best_cost = costs[best_idx]
@@ -198,23 +231,83 @@ def run_random_search(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12))
 
     for _ in range(iterations):
         positions = np.random.uniform(range_min, range_max, (num, dim))
-
         costs = np.array([func(p) for p in positions])
-        idx = np.argmin(costs)
 
+        idx = np.argmin(costs)
         if costs[idx] < best_cost:
             best_cost = costs[idx]
             best = positions[idx].copy()
 
-        history.append(
-            {
-                "pos": positions.copy(),
-                "best": best.copy(),
-                "best_cost": best_cost,
-            }
-        )
+        history.append(make_history_state(positions, best, best_cost, func))
 
-    return history
+    return {
+        "history": history,
+        "best_position": best.copy(),
+        "best_cost": float(best_cost),
+    }
+
+
+def run_gwo(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
+    range_min, range_max = bounds
+
+    wolves = np.random.uniform(range_min, range_max, (num, dim))
+    history = []
+
+    alpha_pos = np.zeros(dim)
+    beta_pos = np.zeros(dim)
+    delta_pos = np.zeros(dim)
+
+    alpha_score = np.inf
+    beta_score = np.inf
+    delta_score = np.inf
+
+    for t in range(iterations):
+        scores = np.array([func(w) for w in wolves])
+
+        sorted_idx = np.argsort(scores)
+        alpha_pos = wolves[sorted_idx[0]].copy()
+        alpha_score = scores[sorted_idx[0]]
+
+        beta_pos = wolves[sorted_idx[1]].copy()
+        beta_score = scores[sorted_idx[1]]
+
+        delta_pos = wolves[sorted_idx[2]].copy()
+        delta_score = scores[sorted_idx[2]]
+
+        a = 2 - 2 * (t / max(1, iterations - 1))
+
+        for i in range(num):
+            r1 = np.random.rand(dim)
+            r2 = np.random.rand(dim)
+            A1 = 2 * a * r1 - a
+            C1 = 2 * r2
+            D_alpha = np.abs(C1 * alpha_pos - wolves[i])
+            X1 = alpha_pos - A1 * D_alpha
+
+            r1 = np.random.rand(dim)
+            r2 = np.random.rand(dim)
+            A2 = 2 * a * r1 - a
+            C2 = 2 * r2
+            D_beta = np.abs(C2 * beta_pos - wolves[i])
+            X2 = beta_pos - A2 * D_beta
+
+            r1 = np.random.rand(dim)
+            r2 = np.random.rand(dim)
+            A3 = 2 * a * r1 - a
+            C3 = 2 * r2
+            D_delta = np.abs(C3 * delta_pos - wolves[i])
+            X3 = delta_pos - A3 * D_delta
+
+            wolves[i] = (X1 + X2 + X3) / 3.0
+            wolves[i] = np.clip(wolves[i], range_min, range_max)
+
+        history.append(make_history_state(wolves, alpha_pos, alpha_score, func))
+
+    return {
+        "history": history,
+        "best_position": alpha_pos.copy(),
+        "best_cost": float(alpha_score),
+    }
 
 
 # =========================
@@ -223,6 +316,7 @@ def run_random_search(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12))
 ALGORITHMS = {
     "pso": run_pso,
     "random": run_random_search,
+    "gwo": run_gwo,
 }
 
 
@@ -244,6 +338,10 @@ FUNCTIONS = {
         "func": eggholder,
         "bounds": (-512, 512),
     },
+    "himmelblau": {
+        "func": himmelblau,
+        "bounds": (-5, 5),
+    },
 }
 
 
@@ -253,8 +351,8 @@ FUNCTIONS = {
 if __name__ == "__main__":
     np.random.seed(42)
 
-    algorithm_name = "pso"          # "pso" albo "random"
-    function_name = "rastrigin"     # "rastrigin" coś co zaraz zaimplementuję i swear
+    algorithm_name = "gwo"          # "pso", "random", "gwo"
+    function_name = "rastrigin"     # "rastrigin", "eggholder", "himmelblau"
 
     problem = FUNCTIONS[function_name]
     func = problem["func"]
@@ -262,7 +360,9 @@ if __name__ == "__main__":
 
     X, Y, Z = make_surface(func, bounds[0], bounds[1], points=80)
 
-    history = run_algorithm(
+    start = time.perf_counter()
+
+    result = run_algorithm(
         algorithm_name,
         func,
         num=50,
@@ -271,5 +371,25 @@ if __name__ == "__main__":
         bounds=bounds,
     )
 
-    save_gif(history, func, X, Y, Z, filename=f"{algorithm_name}_{function_name}.gif", fps=15)
+    elapsed = time.perf_counter() - start
+
+    history = result["history"]
+
+    print(f"Algorytm: {algorithm_name}")
+    print(f"Funkcja: {function_name}")
+    print(f"Najlepszy wynik: {result['best_cost']:.6f}")
+    print(f"Najlepsza pozycja: {result['best_position']}")
+    print(f"Czas działania: {elapsed:.4f} s")
+
+    save_gif(
+        history,
+        func,
+        X,
+        Y,
+        Z,
+        filename=f"{algorithm_name}_{function_name}.gif",
+        fps=15,
+    )
+
+    plot_convergence(history, algorithm_name, function_name)
     show_interactive_plot(history, func, X, Y, Z, bounds[0], bounds[1])
