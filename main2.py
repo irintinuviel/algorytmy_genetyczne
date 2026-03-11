@@ -1,4 +1,5 @@
 import time
+import csv
 import numpy as np
 import matplotlib
 
@@ -30,7 +31,7 @@ def himmelblau(x):
 
 
 # =========================
-# WSPOLNE NARZEDZIA
+# WSPÓLNE NARZĘDZIA
 # =========================
 def make_surface(func, range_min, range_max, points=80):
     x = np.linspace(range_min, range_max, points)
@@ -45,7 +46,17 @@ def make_surface(func, range_min, range_max, points=80):
     return X, Y, Z
 
 
-def save_gif(history, func, X, Y, Z, filename="opt.gif", fps=10):
+def make_history_state(pos, best, best_cost, func):
+    return {
+        "pos": pos.copy(),
+        "best": best.copy(),
+        "best_cost": float(best_cost),
+        "z_pos": np.array([func(p) for p in pos]),
+        "z_best": float(best_cost),
+    }
+
+
+def save_gif(history, X, Y, Z, filename="opt.gif", fps=10):
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d")
 
@@ -72,7 +83,7 @@ def save_gif(history, func, X, Y, Z, filename="opt.gif", fps=10):
     plt.close(fig)
 
 
-def show_interactive_plot(history, func, X, Y, Z, range_min, range_max):
+def show_interactive_plot(history, X, Y, Z, range_min, range_max):
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection="3d")
 
@@ -115,7 +126,7 @@ def show_interactive_plot(history, func, X, Y, Z, range_min, range_max):
         if event.key == " ":
             paused = not paused
         elif event.key == "q":
-            plt.close()
+            plt.close(fig)
 
     fig.canvas.mpl_connect("key_press_event", on_key)
 
@@ -137,22 +148,40 @@ def plot_convergence(history, algorithm_name, function_name):
     best_values = [state["best_cost"] for state in history]
 
     plt.figure(figsize=(8, 5))
-    plt.plot(best_values)
+    plt.plot(best_values, label=f"{algorithm_name}")
     plt.xlabel("Iteracja")
     plt.ylabel("Najlepsza wartość funkcji")
     plt.title(f"Zbieżność: {algorithm_name} / {function_name}")
     plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
     plt.show()
 
 
-def make_history_state(pos, best, best_cost, func):
-    return {
-        "pos": pos.copy(),
-        "best": best.copy(),
-        "best_cost": float(best_cost),
-        "z_pos": np.array([func(p) for p in pos]),
-        "z_best": float(best_cost),
-    }
+def plot_multiple_convergences(results, function_name):
+    plt.figure(figsize=(8, 5))
+    for algorithm_name, result in results.items():
+        best_values = [state["best_cost"] for state in result["history"]]
+        plt.plot(best_values, label=algorithm_name)
+
+    plt.xlabel("Iteracja")
+    plt.ylabel("Najlepsza wartość funkcji")
+    plt.title(f"Porównanie zbieżności / {function_name}")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def save_benchmark_csv(rows, filename="benchmark_results.csv"):
+    if not rows:
+        return
+
+    fieldnames = list(rows[0].keys())
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 # =========================
@@ -254,25 +283,34 @@ def run_gwo(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
     history = []
 
     alpha_pos = np.zeros(dim)
-    beta_pos = np.zeros(dim)
-    delta_pos = np.zeros(dim)
-
     alpha_score = np.inf
+
+    beta_pos = np.zeros(dim)
     beta_score = np.inf
+
+    delta_pos = np.zeros(dim)
     delta_score = np.inf
 
     for t in range(iterations):
         scores = np.array([func(w) for w in wolves])
-
         sorted_idx = np.argsort(scores)
+
         alpha_pos = wolves[sorted_idx[0]].copy()
         alpha_score = scores[sorted_idx[0]]
 
-        beta_pos = wolves[sorted_idx[1]].copy()
-        beta_score = scores[sorted_idx[1]]
+        if num > 1:
+            beta_pos = wolves[sorted_idx[1]].copy()
+            beta_score = scores[sorted_idx[1]]
+        else:
+            beta_pos = alpha_pos.copy()
+            beta_score = alpha_score
 
-        delta_pos = wolves[sorted_idx[2]].copy()
-        delta_score = scores[sorted_idx[2]]
+        if num > 2:
+            delta_pos = wolves[sorted_idx[2]].copy()
+            delta_score = scores[sorted_idx[2]]
+        else:
+            delta_pos = beta_pos.copy()
+            delta_score = beta_score
 
         a = 2 - 2 * (t / max(1, iterations - 1))
 
@@ -311,7 +349,7 @@ def run_gwo(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
 
 
 # =========================
-# WYBOR ALGORYTMU
+# WYBÓR ALGORYTMU
 # =========================
 ALGORITHMS = {
     "pso": run_pso,
@@ -346,50 +384,210 @@ FUNCTIONS = {
 
 
 # =========================
-# MAIN
+# BENCHMARK
 # =========================
-if __name__ == "__main__":
-    np.random.seed(42)
-
-    algorithm_name = "gwo"          # "pso", "random", "gwo"
-    function_name = "rastrigin"     # "rastrigin", "eggholder", "himmelblau"
+def benchmark_algorithm(
+    algorithm_name,
+    function_name,
+    runs=10,
+    num=50,
+    iterations=100,
+    dim=2,
+    extra_params=None,
+):
+    if extra_params is None:
+        extra_params = {}
 
     problem = FUNCTIONS[function_name]
     func = problem["func"]
     bounds = problem["bounds"]
 
-    X, Y, Z = make_surface(func, bounds[0], bounds[1], points=80)
+    best_costs = []
+    times = []
 
-    start = time.perf_counter()
+    for seed in range(runs):
+        np.random.seed(seed)
 
-    result = run_algorithm(
-        algorithm_name,
-        func,
-        num=50,
-        iterations=100,
-        dim=2,
-        bounds=bounds,
-    )
+        start = time.perf_counter()
+        result = run_algorithm(
+            algorithm_name,
+            func,
+            num=num,
+            iterations=iterations,
+            dim=dim,
+            bounds=bounds,
+            **extra_params,
+        )
+        elapsed = time.perf_counter() - start
 
-    elapsed = time.perf_counter() - start
+        best_costs.append(result["best_cost"])
+        times.append(elapsed)
 
-    history = result["history"]
+    return {
+        "algorithm": algorithm_name,
+        "function": function_name,
+        "runs": runs,
+        "agents": num,
+        "iterations": iterations,
+        "mean_best": float(np.mean(best_costs)),
+        "std_best": float(np.std(best_costs)),
+        "min_best": float(np.min(best_costs)),
+        "max_best": float(np.max(best_costs)),
+        "mean_time": float(np.mean(times)),
+    }
 
-    print(f"Algorytm: {algorithm_name}")
-    print(f"Funkcja: {function_name}")
-    print(f"Najlepszy wynik: {result['best_cost']:.6f}")
-    print(f"Najlepsza pozycja: {result['best_position']}")
-    print(f"Czas działania: {elapsed:.4f} s")
 
-    save_gif(
-        history,
-        func,
-        X,
-        Y,
-        Z,
-        filename=f"{algorithm_name}_{function_name}.gif",
-        fps=15,
-    )
+def benchmark_parameter_sweep(
+    algorithm_names,
+    function_names,
+    agent_values,
+    iteration_values,
+    runs=10,
+):
+    rows = []
 
-    plot_convergence(history, algorithm_name, function_name)
-    show_interactive_plot(history, func, X, Y, Z, bounds[0], bounds[1])
+    for function_name in function_names:
+        for algorithm_name in algorithm_names:
+            for num in agent_values:
+                for iterations in iteration_values:
+                    if algorithm_name == "pso":
+                        extra_params = {"w": 0.7, "c1": 1.5, "c2": 1.5}
+                    else:
+                        extra_params = {}
+
+                    row = benchmark_algorithm(
+                        algorithm_name=algorithm_name,
+                        function_name=function_name,
+                        runs=runs,
+                        num=num,
+                        iterations=iterations,
+                        dim=2,
+                        extra_params=extra_params,
+                    )
+                    rows.append(row)
+
+                    print(
+                        f"[OK] {algorithm_name:6s} | {function_name:10s} | "
+                        f"agents={num:3d} | iter={iterations:3d} | "
+                        f"mean={row['mean_best']:.6f}"
+                    )
+
+    return rows
+
+
+# =========================
+# MAIN
+# =========================
+if __name__ == "__main__":
+    np.random.seed(42)
+
+    # -------------------------
+    # TRYB 1: pojedynczy pokaz
+    # -------------------------
+    DEMO_MODE = True
+
+    # -------------------------
+    # TRYB 2: benchmark do tabeli
+    # -------------------------
+    BENCHMARK_MODE = True
+
+    if DEMO_MODE:
+        algorithm_name = "gwo"          # "pso", "random", "gwo"
+        function_name = "rastrigin"     # "rastrigin", "eggholder", "himmelblau"
+
+        problem = FUNCTIONS[function_name]
+        func = problem["func"]
+        bounds = problem["bounds"]
+
+        X, Y, Z = make_surface(func, bounds[0], bounds[1], points=80)
+
+        start = time.perf_counter()
+        if algorithm_name == "pso":
+            result = run_algorithm(
+                algorithm_name,
+                func,
+                num=50,
+                iterations=100,
+                dim=2,
+                bounds=bounds,
+                w=0.7,
+                c1=1.5,
+                c2=1.5,
+            )
+        else:
+            result = run_algorithm(
+                algorithm_name,
+                func,
+                num=50,
+                iterations=100,
+                dim=2,
+                bounds=bounds,
+            )
+
+        elapsed = time.perf_counter() - start
+        history = result["history"]
+
+        print(f"Algorytm: {algorithm_name}")
+        print(f"Funkcja: {function_name}")
+        print(f"Najlepszy wynik: {result['best_cost']:.6f}")
+        print(f"Najlepsza pozycja: {result['best_position']}")
+        print(f"Czas działania: {elapsed:.4f} s")
+
+        save_gif(
+            history,
+            X,
+            Y,
+            Z,
+            filename=f"{algorithm_name}_{function_name}.gif",
+            fps=15,
+        )
+
+        plot_convergence(history, algorithm_name, function_name)
+        show_interactive_plot(history, X, Y, Z, bounds[0], bounds[1])
+
+    if BENCHMARK_MODE:
+        rows = benchmark_parameter_sweep(
+            algorithm_names=["pso", "gwo"],
+            function_names=["rastrigin", "eggholder", "himmelblau"],
+            agent_values=[20, 50, 100],
+            iteration_values=[50, 100, 200],
+            runs=10,
+        )
+
+        save_benchmark_csv(rows, filename="benchmark_results.csv")
+        print("\nZapisano benchmark do pliku: benchmark_results.csv")
+
+        # dodatkowy prosty pokaz porównania zbieżności dla jednej funkcji
+        compare_function = "rastrigin"
+        compare_problem = FUNCTIONS[compare_function]
+        compare_func = compare_problem["func"]
+        compare_bounds = compare_problem["bounds"]
+
+        comparison_results = {}
+        for algorithm_name in ["pso", "gwo"]:
+            np.random.seed(42)
+            if algorithm_name == "pso":
+                result = run_algorithm(
+                    algorithm_name,
+                    compare_func,
+                    num=50,
+                    iterations=100,
+                    dim=2,
+                    bounds=compare_bounds,
+                    w=0.7,
+                    c1=1.5,
+                    c2=1.5,
+                )
+            else:
+                result = run_algorithm(
+                    algorithm_name,
+                    compare_func,
+                    num=50,
+                    iterations=100,
+                    dim=2,
+                    bounds=compare_bounds,
+                )
+
+            comparison_results[algorithm_name] = result
+
+        plot_multiple_convergences(comparison_results, compare_function)
