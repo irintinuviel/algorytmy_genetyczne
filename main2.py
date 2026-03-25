@@ -15,7 +15,7 @@ from matplotlib.animation import PillowWriter
 # =========================
 def rastrigin(x):
     x = np.array(x)
-    return 10 * len(x) + np.sum(x**2 - 10 * np.cos(2 * np.pi * x))
+    return 10 * len(x) + np.sum(x ** 2 - 10 * np.cos(2 * np.pi * x))
 
 
 def eggholder(x):
@@ -27,7 +27,7 @@ def eggholder(x):
 
 def himmelblau(x):
     x1, x2 = x
-    return (x1**2 + x2 - 11) ** 2 + (x1 + x2**2 - 7) ** 2
+    return (x1 ** 2 + x2 - 11) ** 2 + (x1 + x2 ** 2 - 7) ** 2
 
 
 # =========================
@@ -188,14 +188,14 @@ def save_benchmark_csv(rows, filename="benchmark_results.csv"):
 # ALGORYTMY
 # =========================
 def run_pso(
-    func,
-    num=50,
-    iterations=100,
-    dim=2,
-    bounds=(-5.12, 5.12),
-    w=0.7,
-    c1=1.5,
-    c2=1.5,
+        func,
+        num=50,
+        iterations=100,
+        dim=2,
+        bounds=(-5.12, 5.12),
+        w=0.7,
+        c1=1.5,
+        c2=1.5,
 ):
     range_min, range_max = bounds
 
@@ -217,9 +217,9 @@ def run_pso(
             r2 = np.random.rand(dim)
 
             velocities[i] = (
-                w * velocities[i]
-                + c1 * r1 * (pbest_positions[i] - positions[i])
-                + c2 * r2 * (gbest_position - positions[i])
+                    w * velocities[i]
+                    + c1 * r1 * (pbest_positions[i] - positions[i])
+                    + c2 * r2 * (gbest_position - positions[i])
             )
 
             positions[i] += velocities[i]
@@ -348,6 +348,68 @@ def run_gwo(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
     }
 
 
+def run_scso(
+        func,
+        num=50,
+        iterations=100,
+        dim=2,
+        bounds=(-5.12, 5.12),
+):
+    range_min, range_max = bounds
+    positions = np.random.uniform(range_min, range_max, (num, dim))
+
+    fitness = np.array([func(p) for p in positions])
+
+    best_idx = np.argmin(fitness)
+    best_position = positions[best_idx].copy()
+    best_cost = fitness[best_idx]
+
+    history = []
+
+    for t in range(iterations):
+
+        r = 2 * (1 - t / iterations)
+
+        for i in range(num):
+
+            R = 2 * r * np.random.rand() - r
+
+            if abs(R) <= 1:
+                theta = np.random.uniform(0, 2 * np.pi)
+                direction = np.array([np.cos(theta), np.sin(theta)])
+                new_pos = best_position + R * direction * np.abs(best_position - positions[i])
+            else:
+                rand_idx = np.random.randint(num)
+                X_rand = positions[rand_idx]
+
+                new_pos = X_rand + R * np.abs(
+                    np.random.rand(dim) * X_rand - positions[i]
+                )
+
+            new_pos = np.clip(new_pos, range_min, range_max)
+
+            new_cost = func(new_pos)
+
+            if new_cost < fitness[i]:
+                positions[i] = new_pos
+                fitness[i] = new_cost
+
+        best_idx = np.argmin(fitness)
+        if fitness[best_idx] < best_cost:
+            best_cost = fitness[best_idx]
+            best_position = positions[best_idx].copy()
+
+        history.append(
+            make_history_state(positions, best_position, best_cost, func)
+        )
+
+    return {
+        "best_position": best_position,
+        "best_cost": best_cost,
+        "history": history,
+    }
+
+
 # =========================
 # WYBÓR ALGORYTMU
 # =========================
@@ -355,6 +417,7 @@ ALGORITHMS = {
     "pso": run_pso,
     "random": run_random_search,
     "gwo": run_gwo,
+    "scso": run_scso
 }
 
 
@@ -387,13 +450,13 @@ FUNCTIONS = {
 # BENCHMARK
 # =========================
 def benchmark_algorithm(
-    algorithm_name,
-    function_name,
-    runs=10,
-    num=50,
-    iterations=100,
-    dim=2,
-    extra_params=None,
+        algorithm_name,
+        function_name,
+        runs=10,
+        num=50,
+        iterations=100,
+        dim=2,
+        extra_params=None,
 ):
     if extra_params is None:
         extra_params = {}
@@ -438,11 +501,11 @@ def benchmark_algorithm(
 
 
 def benchmark_parameter_sweep(
-    algorithm_names,
-    function_names,
-    agent_values,
-    iteration_values,
-    runs=10,
+        algorithm_names,
+        function_names,
+        agent_values,
+        iteration_values,
+        runs=10,
 ):
     rows = []
 
@@ -484,7 +547,7 @@ if __name__ == "__main__":
     # -------------------------
     # TRYB 1: pojedynczy pokaz
     # -------------------------
-    DEMO_MODE = True
+    DEMO_MODE = False
 
     # -------------------------
     # TRYB 2: benchmark do tabeli
@@ -492,8 +555,8 @@ if __name__ == "__main__":
     BENCHMARK_MODE = True
 
     if DEMO_MODE:
-        algorithm_name = "gwo"          # "pso", "random", "gwo"
-        function_name = "rastrigin"     # "rastrigin", "eggholder", "himmelblau"
+        algorithm_name = "pso"  # "pso", "random", "gwo"
+        function_name = "rastrigin"  # "rastrigin", "eggholder", "himmelblau"
 
         problem = FUNCTIONS[function_name]
         func = problem["func"]
@@ -547,7 +610,7 @@ if __name__ == "__main__":
 
     if BENCHMARK_MODE:
         rows = benchmark_parameter_sweep(
-            algorithm_names=["pso", "gwo"],
+            algorithm_names=["pso", "gwo", "scso"],
             function_names=["rastrigin", "eggholder", "himmelblau"],
             agent_values=[20, 50, 100],
             iteration_values=[50, 100, 200],
@@ -564,7 +627,7 @@ if __name__ == "__main__":
         compare_bounds = compare_problem["bounds"]
 
         comparison_results = {}
-        for algorithm_name in ["pso", "gwo"]:
+        for algorithm_name in ["pso", "gwo", "scso"]:
             np.random.seed(42)
             if algorithm_name == "pso":
                 result = run_algorithm(
