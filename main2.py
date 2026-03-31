@@ -60,7 +60,7 @@ def save_gif(history, X, Y, Z, filename="opt.gif", fps=10):
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d")
 
-    ax.plot_surface(X, Y, Z, alpha=0.3)
+    ax.plot_surface(X, Y, Z, alpha=0.3, cmap="viridis")
 
     agents_scatter = ax.scatter([], [], [])
     best_scatter = ax.scatter([], [], [], marker="x", s=200)
@@ -87,7 +87,7 @@ def show_interactive_plot(history, X, Y, Z, range_min, range_max):
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection="3d")
 
-    ax.plot_surface(X, Y, Z, alpha=0.3)
+    ax.plot_surface(X, Y, Z, alpha=0.3, cmap="viridis")
 
     agents_scatter = ax.scatter([], [], [])
     best_scatter = ax.scatter([], [], [], marker="x", s=200)
@@ -188,14 +188,14 @@ def save_benchmark_csv(rows, filename="benchmark_results.csv"):
 # ALGORYTMY
 # =========================
 def run_pso(
-        func,
-        num=50,
-        iterations=100,
-        dim=2,
-        bounds=(-5.12, 5.12),
-        w=0.7,
-        c1=1.5,
-        c2=1.5,
+    func,
+    num=50,
+    iterations=100,
+    dim=2,
+    bounds=(-5.12, 5.12),
+    w=0.7,
+    c1=1.5,
+    c2=1.5,
 ):
     range_min, range_max = bounds
 
@@ -217,9 +217,9 @@ def run_pso(
             r2 = np.random.rand(dim)
 
             velocities[i] = (
-                    w * velocities[i]
-                    + c1 * r1 * (pbest_positions[i] - positions[i])
-                    + c2 * r2 * (gbest_position - positions[i])
+                w * velocities[i]
+                + c1 * r1 * (pbest_positions[i] - positions[i])
+                + c2 * r2 * (gbest_position - positions[i])
             )
 
             positions[i] += velocities[i]
@@ -346,21 +346,19 @@ def run_gwo(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
         "best_position": alpha_pos.copy(),
         "best_cost": float(alpha_score),
     }
-import numpy as np
 
 
-def run_BSO(
-        func,
-        num=50,
-        iterations=100,
-        dim=2,
-        bounds=(-5.12, 5.12),
-        k_clusters=5,
-        p_replace=0.1,
+def run_bso(
+    func,
+    num=50,
+    iterations=100,
+    dim=2,
+    bounds=(-5.12, 5.12),
+    k_clusters=5,
+    p_replace=0.1,
 ):
     range_min, range_max = bounds
 
-    # Initialize population
     positions = np.random.uniform(range_min, range_max, (num, dim))
     fitness = np.array([func(p) for p in positions])
 
@@ -370,9 +368,7 @@ def run_BSO(
 
     history = []
 
-    for t in range(iterations):
-
-        # ---- CLUSTERING (simple random clustering instead of full k-means) ----
+    for _ in range(iterations):
         cluster_ids = np.random.randint(0, k_clusters, num)
 
         clusters = []
@@ -386,63 +382,51 @@ def run_BSO(
 
         clusters = np.array(clusters)
 
-        # ---- IDEA GENERATION ----
         for i in range(num):
-
             if np.random.rand() < p_replace:
-                # random reinitialization (diversification)
                 new_pos = np.random.uniform(range_min, range_max, dim)
-
             else:
-                # pick cluster(s)
                 if np.random.rand() < 0.5:
-                    # single cluster
                     c = clusters[np.random.randint(k_clusters)]
                     noise = np.random.normal(0, 1, dim) * (range_max - range_min) * 0.05
                     new_pos = c + noise
                 else:
-                    # combine two clusters
                     c1 = clusters[np.random.randint(k_clusters)]
                     c2 = clusters[np.random.randint(k_clusters)]
                     alpha = np.random.rand()
                     noise = np.random.normal(0, 1, dim) * (range_max - range_min) * 0.05
                     new_pos = alpha * c1 + (1 - alpha) * c2 + noise
 
-            # bounds
             new_pos = np.clip(new_pos, range_min, range_max)
-
-            # evaluate
             new_cost = func(new_pos)
 
             if new_cost < fitness[i]:
                 positions[i] = new_pos
                 fitness[i] = new_cost
 
-        # ---- GLOBAL BEST UPDATE ----
         best_idx = np.argmin(fitness)
         if fitness[best_idx] < best_cost:
             best_cost = fitness[best_idx]
             best_position = positions[best_idx].copy()
 
-        history.append(
-            make_history_state(positions, best_position, best_cost, func)
-        )
+        history.append(make_history_state(positions, best_position, best_cost, func))
 
     return {
         "best_position": best_position,
-        "best_cost": best_cost,
+        "best_cost": float(best_cost),
         "history": history,
     }
+
+
 def run_scso(
-        func,
-        num=50,
-        iterations=100,
-        dim=2,
-        bounds=(-5.12, 5.12),
+    func,
+    num=50,
+    iterations=100,
+    dim=2,
+    bounds=(-5.12, 5.12),
 ):
     range_min, range_max = bounds
     positions = np.random.uniform(range_min, range_max, (num, dim))
-
     fitness = np.array([func(p) for p in positions])
 
     best_idx = np.argmin(fitness)
@@ -452,27 +436,27 @@ def run_scso(
     history = []
 
     for t in range(iterations):
-
         r = 2 * (1 - t / iterations)
 
         for i in range(num):
-
             R = 2 * r * np.random.rand() - r
 
             if abs(R) <= 1:
-                theta = np.random.uniform(0, 2 * np.pi)
-                direction = np.array([np.cos(theta), np.sin(theta)])
+                direction = np.random.normal(0, 1, dim)
+                norm = np.linalg.norm(direction)
+                if norm > 0:
+                    direction = direction / norm
+                else:
+                    direction = np.ones(dim) / np.sqrt(dim)
+
                 new_pos = best_position + R * direction * np.abs(best_position - positions[i])
             else:
                 rand_idx = np.random.randint(num)
-                X_rand = positions[rand_idx]
+                x_rand = positions[rand_idx]
 
-                new_pos = X_rand + R * np.abs(
-                    np.random.rand(dim) * X_rand - positions[i]
-                )
+                new_pos = x_rand + R * np.abs(np.random.rand(dim) * x_rand - positions[i])
 
             new_pos = np.clip(new_pos, range_min, range_max)
-
             new_cost = func(new_pos)
 
             if new_cost < fitness[i]:
@@ -484,13 +468,11 @@ def run_scso(
             best_cost = fitness[best_idx]
             best_position = positions[best_idx].copy()
 
-        history.append(
-            make_history_state(positions, best_position, best_cost, func)
-        )
+        history.append(make_history_state(positions, best_position, best_cost, func))
 
     return {
         "best_position": best_position,
-        "best_cost": best_cost,
+        "best_cost": float(best_cost),
         "history": history,
     }
 
@@ -502,14 +484,16 @@ ALGORITHMS = {
     "pso": run_pso,
     "random": run_random_search,
     "gwo": run_gwo,
-    "scso": run_scso
+    "scso": run_scso,
+    "bso": run_bso,
 }
 
 
 def run_algorithm(name, func, **kwargs):
-    if name not in ALGORITHMS:
+    key = name.lower()
+    if key not in ALGORITHMS:
         raise ValueError(f"Nieznany algorytm: {name}")
-    return ALGORITHMS[name](func, **kwargs)
+    return ALGORITHMS[key](func, **kwargs)
 
 
 # =========================
@@ -532,16 +516,30 @@ FUNCTIONS = {
 
 
 # =========================
+# PARAMETRY DOMYŚLNE DLA ALGORYTMÓW
+# =========================
+def get_extra_params(algorithm_name):
+    key = algorithm_name.lower()
+
+    if key == "pso":
+        return {"w": 0.7, "c1": 1.5, "c2": 1.5}
+    if key == "bso":
+        return {"k_clusters": 5, "p_replace": 0.1}
+
+    return {}
+
+
+# =========================
 # BENCHMARK
 # =========================
 def benchmark_algorithm(
-        algorithm_name,
-        function_name,
-        runs=10,
-        num=50,
-        iterations=100,
-        dim=2,
-        extra_params=None,
+    algorithm_name,
+    function_name,
+    runs=10,
+    num=50,
+    iterations=100,
+    dim=2,
+    extra_params=None,
 ):
     if extra_params is None:
         extra_params = {}
@@ -586,11 +584,11 @@ def benchmark_algorithm(
 
 
 def benchmark_parameter_sweep(
-        algorithm_names,
-        function_names,
-        agent_values,
-        iteration_values,
-        runs=10,
+    algorithm_names,
+    function_names,
+    agent_values,
+    iteration_values,
+    runs=10,
 ):
     rows = []
 
@@ -598,10 +596,7 @@ def benchmark_parameter_sweep(
         for algorithm_name in algorithm_names:
             for num in agent_values:
                 for iterations in iteration_values:
-                    if algorithm_name == "pso":
-                        extra_params = {"w": 0.7, "c1": 1.5, "c2": 1.5}
-                    else:
-                        extra_params = {}
+                    extra_params = get_extra_params(algorithm_name)
 
                     row = benchmark_algorithm(
                         algorithm_name=algorithm_name,
@@ -640,8 +635,8 @@ if __name__ == "__main__":
     BENCHMARK_MODE = True
 
     if DEMO_MODE:
-        algorithm_name = "pso"  # "pso", "random", "gwo"
-        function_name = "rastrigin"  # "rastrigin", "eggholder", "himmelblau"
+        algorithm_name = "bso"   # "pso", "random", "gwo", "scso", "bso"
+        function_name = "rastrigin"   # "rastrigin", "eggholder", "himmelblau"
 
         problem = FUNCTIONS[function_name]
         func = problem["func"]
@@ -650,27 +645,17 @@ if __name__ == "__main__":
         X, Y, Z = make_surface(func, bounds[0], bounds[1], points=80)
 
         start = time.perf_counter()
-        if algorithm_name == "pso":
-            result = run_algorithm(
-                algorithm_name,
-                func,
-                num=50,
-                iterations=100,
-                dim=2,
-                bounds=bounds,
-                w=0.7,
-                c1=1.5,
-                c2=1.5,
-            )
-        else:
-            result = run_algorithm(
-                algorithm_name,
-                func,
-                num=50,
-                iterations=100,
-                dim=2,
-                bounds=bounds,
-            )
+
+        extra_params = get_extra_params(algorithm_name)
+        result = run_algorithm(
+            algorithm_name,
+            func,
+            num=50,
+            iterations=100,
+            dim=2,
+            bounds=bounds,
+            **extra_params,
+        )
 
         elapsed = time.perf_counter() - start
         history = result["history"]
@@ -695,7 +680,7 @@ if __name__ == "__main__":
 
     if BENCHMARK_MODE:
         rows = benchmark_parameter_sweep(
-            algorithm_names=["pso", "gwo", "scso"],
+            algorithm_names=["pso", "gwo", "scso", "bso"],
             function_names=["rastrigin", "eggholder", "himmelblau"],
             agent_values=[20, 50, 100],
             iteration_values=[50, 100, 200],
@@ -705,36 +690,25 @@ if __name__ == "__main__":
         save_benchmark_csv(rows, filename="benchmark_results.csv")
         print("\nZapisano benchmark do pliku: benchmark_results.csv")
 
-        # dodatkowy prosty pokaz porównania zbieżności dla jednej funkcji
         compare_function = "rastrigin"
         compare_problem = FUNCTIONS[compare_function]
         compare_func = compare_problem["func"]
         compare_bounds = compare_problem["bounds"]
 
         comparison_results = {}
-        for algorithm_name in ["pso", "gwo", "scso"]:
+        for algorithm_name in ["pso", "gwo", "scso", "bso"]:
             np.random.seed(42)
-            if algorithm_name == "pso":
-                result = run_algorithm(
-                    algorithm_name,
-                    compare_func,
-                    num=50,
-                    iterations=100,
-                    dim=2,
-                    bounds=compare_bounds,
-                    w=0.7,
-                    c1=1.5,
-                    c2=1.5,
-                )
-            else:
-                result = run_algorithm(
-                    algorithm_name,
-                    compare_func,
-                    num=50,
-                    iterations=100,
-                    dim=2,
-                    bounds=compare_bounds,
-                )
+            extra_params = get_extra_params(algorithm_name)
+
+            result = run_algorithm(
+                algorithm_name,
+                compare_func,
+                num=50,
+                iterations=100,
+                dim=2,
+                bounds=compare_bounds,
+                **extra_params,
+            )
 
             comparison_results[algorithm_name] = result
 
