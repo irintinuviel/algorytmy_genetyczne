@@ -346,8 +346,93 @@ def run_gwo(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
         "best_position": alpha_pos.copy(),
         "best_cost": float(alpha_score),
     }
+import numpy as np
 
 
+def run_BSO(
+        func,
+        num=50,
+        iterations=100,
+        dim=2,
+        bounds=(-5.12, 5.12),
+        k_clusters=5,
+        p_replace=0.1,
+):
+    range_min, range_max = bounds
+
+    # Initialize population
+    positions = np.random.uniform(range_min, range_max, (num, dim))
+    fitness = np.array([func(p) for p in positions])
+
+    best_idx = np.argmin(fitness)
+    best_position = positions[best_idx].copy()
+    best_cost = fitness[best_idx]
+
+    history = []
+
+    for t in range(iterations):
+
+        # ---- CLUSTERING (simple random clustering instead of full k-means) ----
+        cluster_ids = np.random.randint(0, k_clusters, num)
+
+        clusters = []
+        for k in range(k_clusters):
+            members = positions[cluster_ids == k]
+            if len(members) > 0:
+                center = np.mean(members, axis=0)
+            else:
+                center = np.random.uniform(range_min, range_max, dim)
+            clusters.append(center)
+
+        clusters = np.array(clusters)
+
+        # ---- IDEA GENERATION ----
+        for i in range(num):
+
+            if np.random.rand() < p_replace:
+                # random reinitialization (diversification)
+                new_pos = np.random.uniform(range_min, range_max, dim)
+
+            else:
+                # pick cluster(s)
+                if np.random.rand() < 0.5:
+                    # single cluster
+                    c = clusters[np.random.randint(k_clusters)]
+                    noise = np.random.normal(0, 1, dim) * (range_max - range_min) * 0.05
+                    new_pos = c + noise
+                else:
+                    # combine two clusters
+                    c1 = clusters[np.random.randint(k_clusters)]
+                    c2 = clusters[np.random.randint(k_clusters)]
+                    alpha = np.random.rand()
+                    noise = np.random.normal(0, 1, dim) * (range_max - range_min) * 0.05
+                    new_pos = alpha * c1 + (1 - alpha) * c2 + noise
+
+            # bounds
+            new_pos = np.clip(new_pos, range_min, range_max)
+
+            # evaluate
+            new_cost = func(new_pos)
+
+            if new_cost < fitness[i]:
+                positions[i] = new_pos
+                fitness[i] = new_cost
+
+        # ---- GLOBAL BEST UPDATE ----
+        best_idx = np.argmin(fitness)
+        if fitness[best_idx] < best_cost:
+            best_cost = fitness[best_idx]
+            best_position = positions[best_idx].copy()
+
+        history.append(
+            make_history_state(positions, best_position, best_cost, func)
+        )
+
+    return {
+        "best_position": best_position,
+        "best_cost": best_cost,
+        "history": history,
+    }
 def run_scso(
         func,
         num=50,
