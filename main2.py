@@ -1,5 +1,7 @@
-import time
+import os
 import csv
+import time
+import math
 import numpy as np
 import matplotlib
 
@@ -10,12 +12,48 @@ from matplotlib.widgets import Slider
 from matplotlib.animation import PillowWriter
 
 
-# =========================
+# ============================================================
+# KONFIGURACJA
+# ============================================================
+RESULTS_DIR = "results"
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+GLOBAL_SEED = 42
+
+DEMO_MODE_CONTINUOUS = False
+DEMO_MODE_TSP = False
+
+BENCHMARK_MODE_CONTINUOUS = True
+BENCHMARK_MODE_TSP = True
+
+CONTINUOUS_RUNS = 20
+TSP_RUNS = 20
+
+AGENT_VALUES = [10, 20, 50, 100]
+ITERATION_VALUES = [50, 100, 200]
+DIM_VALUES = [2, 5, 10]
+CITY_VALUES = [10, 20, 50]
+
+
+# ============================================================
 # FUNKCJE CELU
-# =========================
+# ============================================================
 def rastrigin(x):
-    x = np.array(x)
-    return 10 * len(x) + np.sum(x**2 - 10 * np.cos(2 * np.pi * x))
+    x = np.array(x, dtype=float)
+    return 10 * len(x) + np.sum(x ** 2 - 10 * np.cos(2 * np.pi * x))
+
+
+def schwefel(x):
+    x = np.array(x, dtype=float)
+    return 418.9829 * len(x) - np.sum(x * np.sin(np.sqrt(np.abs(x))))
+
+
+def ackley(x):
+    x = np.array(x, dtype=float)
+    n = len(x)
+    s1 = np.sum(x ** 2)
+    s2 = np.sum(np.cos(2 * np.pi * x))
+    return -20 * np.exp(-0.2 * np.sqrt(s1 / n)) - np.exp(s2 / n) + 20 + np.e
 
 
 def eggholder(x):
@@ -27,18 +65,60 @@ def eggholder(x):
 
 def himmelblau(x):
     x1, x2 = x
-    return (x1**2 + x2 - 11) ** 2 + (x1 + x2**2 - 7) ** 2
+    return (x1 ** 2 + x2 - 11) ** 2 + (x1 + x2 ** 2 - 7) ** 2
 
 
-# =========================
+FUNCTIONS = {
+    "rastrigin": {
+        "func": rastrigin,
+        "bounds": (-5.12, 5.12),
+        "dims": [2, 5, 10],
+    },
+    "schwefel": {
+        "func": schwefel,
+        "bounds": (-500, 500),
+        "dims": [2, 5, 10],
+    },
+    "ackley": {
+        "func": ackley,
+        "bounds": (-32.768, 32.768),
+        "dims": [2, 5, 10],
+    },
+    "eggholder": {
+        "func": eggholder,
+        "bounds": (-512, 512),
+        "dims": [2],
+    },
+    "himmelblau": {
+        "func": himmelblau,
+        "bounds": (-5, 5),
+        "dims": [2],
+    },
+}
+
+
+# ============================================================
 # WSPÓLNE NARZĘDZIA
-# =========================
+# ============================================================
+def save_benchmark_csv(rows, filename):
+    if not rows:
+        return
+
+    os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
+
+    fieldnames = list(rows[0].keys())
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def make_surface(func, range_min, range_max, points=80):
     x = np.linspace(range_min, range_max, points)
     y = np.linspace(range_min, range_max, points)
     X, Y = np.meshgrid(x, y)
 
-    Z = np.zeros_like(X)
+    Z = np.zeros_like(X, dtype=float)
     for i in range(points):
         for j in range(points):
             Z[i, j] = func([X[i, j], Y[i, j]])
@@ -60,7 +140,7 @@ def save_gif(history, X, Y, Z, filename="opt.gif", fps=10):
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d")
 
-    ax.plot_surface(X, Y, Z, alpha=0.3)
+    ax.plot_surface(X, Y, Z, alpha=0.3, cmap="viridis")
 
     agents_scatter = ax.scatter([], [], [])
     best_scatter = ax.scatter([], [], [], marker="x", s=200)
@@ -87,7 +167,7 @@ def show_interactive_plot(history, X, Y, Z, range_min, range_max):
     fig = plt.figure(figsize=(9, 7))
     ax = fig.add_subplot(111, projection="3d")
 
-    ax.plot_surface(X, Y, Z, alpha=0.3)
+    ax.plot_surface(X, Y, Z, alpha=0.3, cmap="viridis")
 
     agents_scatter = ax.scatter([], [], [])
     best_scatter = ax.scatter([], [], [], marker="x", s=200)
@@ -144,7 +224,7 @@ def show_interactive_plot(history, X, Y, Z, range_min, range_max):
     plt.show()
 
 
-def plot_convergence(history, algorithm_name, function_name):
+def plot_convergence(history, algorithm_name, function_name, save_path=None):
     best_values = [state["best_cost"] for state in history]
 
     plt.figure(figsize=(8, 5))
@@ -155,10 +235,15 @@ def plot_convergence(history, algorithm_name, function_name):
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    else:
+        plt.show()
 
 
-def plot_multiple_convergences(results, function_name):
+def plot_multiple_convergences(results, function_name, save_path=None):
     plt.figure(figsize=(8, 5))
     for algorithm_name, result in results.items():
         best_values = [state["best_cost"] for state in result["history"]]
@@ -170,23 +255,59 @@ def plot_multiple_convergences(results, function_name):
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    else:
+        plt.show()
 
 
-def save_benchmark_csv(rows, filename="benchmark_results.csv"):
-    if not rows:
-        return
+def plot_tsp_route(cities, route, title="TSP route", save_path=None):
+    ordered = cities[route]
+    closed = np.vstack([ordered, ordered[0]])
 
-    fieldnames = list(rows[0].keys())
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    plt.figure(figsize=(7, 7))
+    plt.scatter(cities[:, 0], cities[:, 1], s=40)
+    plt.plot(closed[:, 0], closed[:, 1], linewidth=1.5)
+
+    for i, (x, y) in enumerate(cities):
+        plt.text(x, y, str(i), fontsize=8)
+
+    plt.title(title)
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    else:
+        plt.show()
 
 
-# =========================
-# ALGORYTMY
-# =========================
+def plot_tsp_convergence(histories, title="TSP convergence", save_path=None):
+    plt.figure(figsize=(8, 5))
+    for name, values in histories.items():
+        plt.plot(values, label=name)
+
+    plt.xlabel("Iteracja")
+    plt.ylabel("Długość najlepszej trasy")
+    plt.title(title)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    else:
+        plt.show()
+
+
+# ============================================================
+# ALGORYTMY CIĄGŁE
+# ============================================================
 def run_pso(
     func,
     num=50,
@@ -348,59 +469,432 @@ def run_gwo(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
     }
 
 
-# =========================
-# WYBÓR ALGORYTMU
-# =========================
-ALGORITHMS = {
-    "pso": run_pso,
-    "random": run_random_search,
-    "gwo": run_gwo,
-}
-
-
-def run_algorithm(name, func, **kwargs):
-    if name not in ALGORITHMS:
-        raise ValueError(f"Nieznany algorytm: {name}")
-    return ALGORITHMS[name](func, **kwargs)
-
-
-# =========================
-# WYBÓR FUNKCJI CELU
-# =========================
-FUNCTIONS = {
-    "rastrigin": {
-        "func": rastrigin,
-        "bounds": (-5.12, 5.12),
-    },
-    "eggholder": {
-        "func": eggholder,
-        "bounds": (-512, 512),
-    },
-    "himmelblau": {
-        "func": himmelblau,
-        "bounds": (-5, 5),
-    },
-}
-
-
-# =========================
-# BENCHMARK
-# =========================
-def benchmark_algorithm(
-    algorithm_name,
-    function_name,
-    runs=10,
+def run_bso(
+    func,
     num=50,
     iterations=100,
     dim=2,
-    extra_params=None,
+    bounds=(-5.12, 5.12),
+    k_clusters=5,
+    p_replace=0.1,
 ):
-    if extra_params is None:
-        extra_params = {}
+    range_min, range_max = bounds
 
+    positions = np.random.uniform(range_min, range_max, (num, dim))
+    fitness = np.array([func(p) for p in positions])
+
+    best_idx = np.argmin(fitness)
+    best_position = positions[best_idx].copy()
+    best_cost = fitness[best_idx]
+
+    history = []
+
+    for _ in range(iterations):
+        cluster_ids = np.random.randint(0, k_clusters, num)
+
+        clusters = []
+        for k in range(k_clusters):
+            members = positions[cluster_ids == k]
+            if len(members) > 0:
+                center = np.mean(members, axis=0)
+            else:
+                center = np.random.uniform(range_min, range_max, dim)
+            clusters.append(center)
+
+        clusters = np.array(clusters)
+
+        for i in range(num):
+            if np.random.rand() < p_replace:
+                new_pos = np.random.uniform(range_min, range_max, dim)
+            else:
+                if np.random.rand() < 0.5:
+                    c = clusters[np.random.randint(k_clusters)]
+                    noise = np.random.normal(0, 1, dim) * (range_max - range_min) * 0.05
+                    new_pos = c + noise
+                else:
+                    c1 = clusters[np.random.randint(k_clusters)]
+                    c2 = clusters[np.random.randint(k_clusters)]
+                    alpha = np.random.rand()
+                    noise = np.random.normal(0, 1, dim) * (range_max - range_min) * 0.05
+                    new_pos = alpha * c1 + (1 - alpha) * c2 + noise
+
+            new_pos = np.clip(new_pos, range_min, range_max)
+            new_cost = func(new_pos)
+
+            if new_cost < fitness[i]:
+                positions[i] = new_pos
+                fitness[i] = new_cost
+
+        best_idx = np.argmin(fitness)
+        if fitness[best_idx] < best_cost:
+            best_cost = fitness[best_idx]
+            best_position = positions[best_idx].copy()
+
+        history.append(make_history_state(positions, best_position, best_cost, func))
+
+    return {
+        "best_position": best_position,
+        "best_cost": float(best_cost),
+        "history": history,
+    }
+
+
+def run_scso(
+    func,
+    num=50,
+    iterations=100,
+    dim=2,
+    bounds=(-5.12, 5.12),
+):
+    range_min, range_max = bounds
+    positions = np.random.uniform(range_min, range_max, (num, dim))
+    fitness = np.array([func(p) for p in positions])
+
+    best_idx = np.argmin(fitness)
+    best_position = positions[best_idx].copy()
+    best_cost = fitness[best_idx]
+
+    history = []
+
+    for t in range(iterations):
+        r = 2 * (1 - t / iterations)
+
+        for i in range(num):
+            R = 2 * r * np.random.rand() - r
+
+            if abs(R) <= 1:
+                direction = np.random.normal(0, 1, dim)
+                norm = np.linalg.norm(direction)
+                if norm > 0:
+                    direction = direction / norm
+                else:
+                    direction = np.ones(dim) / np.sqrt(dim)
+
+                new_pos = best_position + R * direction * np.abs(best_position - positions[i])
+            else:
+                rand_idx = np.random.randint(num)
+                x_rand = positions[rand_idx]
+
+                new_pos = x_rand + R * np.abs(np.random.rand(dim) * x_rand - positions[i])
+
+            new_pos = np.clip(new_pos, range_min, range_max)
+            new_cost = func(new_pos)
+
+            if new_cost < fitness[i]:
+                positions[i] = new_pos
+                fitness[i] = new_cost
+
+        best_idx = np.argmin(fitness)
+        if fitness[best_idx] < best_cost:
+            best_cost = fitness[best_idx]
+            best_position = positions[best_idx].copy()
+
+        history.append(make_history_state(positions, best_position, best_cost, func))
+
+    return {
+        "best_position": best_position,
+        "best_cost": float(best_cost),
+        "history": history,
+    }
+
+
+# ============================================================
+# TSP - NARZĘDZIA
+# ============================================================
+def generate_cities(num_cities, seed=0, scale=100.0):
+    rng = np.random.default_rng(seed)
+    return rng.uniform(0, scale, size=(num_cities, 2))
+
+
+def save_cities_csv(cities, filename):
+    os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["city_id", "x", "y"])
+        for i, (x, y) in enumerate(cities):
+            writer.writerow([i, float(x), float(y)])
+
+
+def route_length(route, cities):
+    total = 0.0
+    n = len(route)
+    for i in range(n):
+        a = cities[route[i]]
+        b = cities[route[(i + 1) % n]]
+        total += np.linalg.norm(a - b)
+    return float(total)
+
+
+def pairwise_distances(cities):
+    n = len(cities)
+    D = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        for j in range(n):
+            if i != j:
+                D[i, j] = np.linalg.norm(cities[i] - cities[j])
+    return D
+
+
+def random_route(n):
+    return np.random.permutation(n)
+
+
+def permutation_to_swaps(source, target):
+    arr = source.copy()
+    pos = {value: idx for idx, value in enumerate(arr)}
+    swaps = []
+
+    for i in range(len(arr)):
+        if arr[i] != target[i]:
+            j = pos[target[i]]
+            swaps.append((i, j))
+
+            pos[arr[i]] = j
+            pos[arr[j]] = i
+            arr[i], arr[j] = arr[j], arr[i]
+
+    return swaps
+
+
+def apply_swaps(route, swaps):
+    r = route.copy()
+    for i, j in swaps:
+        r[i], r[j] = r[j], r[i]
+    return r
+
+
+def sample_swaps(swaps, probability):
+    if probability <= 0:
+        return []
+    chosen = []
+    for swap in swaps:
+        if np.random.rand() < probability:
+            chosen.append(swap)
+    return chosen
+
+
+# ============================================================
+# TSP - ALGORYTMY
+# ============================================================
+def run_dpso_tsp(
+    cities,
+    num=50,
+    iterations=100,
+    inertia_keep=0.6,
+    c1=0.8,
+    c2=0.9,
+):
+    n = len(cities)
+
+    particles = [random_route(n) for _ in range(num)]
+    velocities = [[] for _ in range(num)]
+
+    pbest_positions = [p.copy() for p in particles]
+    pbest_costs = [route_length(p, cities) for p in particles]
+
+    best_idx = int(np.argmin(pbest_costs))
+    gbest_position = pbest_positions[best_idx].copy()
+    gbest_cost = float(pbest_costs[best_idx])
+
+    history_best = []
+
+    for _ in range(iterations):
+        for i in range(num):
+            current = particles[i]
+
+            inertia_part = sample_swaps(velocities[i], inertia_keep)
+
+            cognitive_full = permutation_to_swaps(current, pbest_positions[i])
+            cognitive_part = sample_swaps(cognitive_full, c1)
+
+            social_full = permutation_to_swaps(current, gbest_position)
+            social_part = sample_swaps(social_full, c2)
+
+            new_velocity = inertia_part + cognitive_part + social_part
+            new_position = apply_swaps(current, new_velocity)
+
+            new_cost = route_length(new_position, cities)
+
+            particles[i] = new_position
+            velocities[i] = new_velocity
+
+            if new_cost < pbest_costs[i]:
+                pbest_costs[i] = new_cost
+                pbest_positions[i] = new_position.copy()
+
+        best_idx = int(np.argmin(pbest_costs))
+        if pbest_costs[best_idx] < gbest_cost:
+            gbest_cost = float(pbest_costs[best_idx])
+            gbest_position = pbest_positions[best_idx].copy()
+
+        history_best.append(gbest_cost)
+
+    return {
+        "best_route": gbest_position,
+        "best_cost": float(gbest_cost),
+        "history_best": history_best,
+    }
+
+
+def construct_ant_route(pheromone, distances, alpha, beta, start_city=None):
+    n = pheromone.shape[0]
+
+    if start_city is None:
+        current = np.random.randint(n)
+    else:
+        current = int(start_city)
+
+    unvisited = set(range(n))
+    unvisited.remove(current)
+    route = [current]
+
+    while unvisited:
+        candidates = list(unvisited)
+        probs = []
+
+        for j in candidates:
+            tau = pheromone[current, j] ** alpha
+            eta = (1.0 / (distances[current, j] + 1e-12)) ** beta
+            probs.append(tau * eta)
+
+        probs = np.array(probs, dtype=float)
+        s = probs.sum()
+
+        if s <= 0 or not np.isfinite(s):
+            next_city = np.random.choice(candidates)
+        else:
+            probs /= s
+            next_city = np.random.choice(candidates, p=probs)
+
+        route.append(next_city)
+        unvisited.remove(next_city)
+        current = next_city
+
+    return np.array(route, dtype=int)
+
+
+def run_aco_tsp(
+    cities,
+    num=50,
+    iterations=100,
+    alpha=1.0,
+    beta=3.0,
+    evaporation=0.5,
+    q=100.0,
+):
+    n = len(cities)
+    distances = pairwise_distances(cities)
+    pheromone = np.ones((n, n), dtype=float)
+
+    best_route = None
+    best_cost = np.inf
+    history_best = []
+
+    for _ in range(iterations):
+        all_routes = []
+        all_costs = []
+
+        for _ant in range(num):
+            route = construct_ant_route(pheromone, distances, alpha=alpha, beta=beta)
+            cost = route_length(route, cities)
+
+            all_routes.append(route)
+            all_costs.append(cost)
+
+            if cost < best_cost:
+                best_cost = float(cost)
+                best_route = route.copy()
+
+        pheromone *= (1.0 - evaporation)
+        pheromone = np.maximum(pheromone, 1e-12)
+
+        for route, cost in zip(all_routes, all_costs):
+            deposit = q / (cost + 1e-12)
+            for i in range(n):
+                a = route[i]
+                b = route[(i + 1) % n]
+                pheromone[a, b] += deposit
+                pheromone[b, a] += deposit
+
+        history_best.append(best_cost)
+
+    return {
+        "best_route": best_route,
+        "best_cost": float(best_cost),
+        "history_best": history_best,
+    }
+
+
+# ============================================================
+# WYBÓR ALGORYTMU
+# ============================================================
+CONTINUOUS_ALGORITHMS = {
+    "pso": run_pso,
+    "gwo": run_gwo,
+    "scso": run_scso,
+    "bso": run_bso,
+}
+
+TSP_ALGORITHMS = {
+    "dpso_tsp": run_dpso_tsp,
+    "aco_tsp": run_aco_tsp,
+}
+
+
+def run_continuous_algorithm(name, func, **kwargs):
+    key = name.lower()
+    if key not in CONTINUOUS_ALGORITHMS:
+        raise ValueError(f"Nieznany algorytm ciągły: {name}")
+    return CONTINUOUS_ALGORITHMS[key](func, **kwargs)
+
+
+def run_tsp_algorithm(name, cities, **kwargs):
+    key = name.lower()
+    if key not in TSP_ALGORITHMS:
+        raise ValueError(f"Nieznany algorytm TSP: {name}")
+    return TSP_ALGORITHMS[key](cities, **kwargs)
+
+
+# ============================================================
+# PARAMETRY DOMYŚLNE DLA ALGORYTMÓW
+# ============================================================
+def get_continuous_extra_params(algorithm_name):
+    key = algorithm_name.lower()
+
+    if key == "pso":
+        return {"w": 0.7, "c1": 1.5, "c2": 1.5}
+    if key == "bso":
+        return {"k_clusters": 5, "p_replace": 0.1}
+
+    return {}
+
+
+def get_tsp_extra_params(algorithm_name):
+    key = algorithm_name.lower()
+
+    if key == "dpso_tsp":
+        return {"inertia_keep": 0.6, "c1": 0.8, "c2": 0.9}
+    if key == "aco_tsp":
+        return {"alpha": 1.0, "beta": 3.0, "evaporation": 0.5, "q": 100.0}
+
+    return {}
+
+
+# ============================================================
+# BENCHMARK - CIĄGŁE
+# ============================================================
+def benchmark_continuous_algorithm(
+    algorithm_name,
+    function_name,
+    runs=20,
+    num=50,
+    iterations=100,
+    dim=2,
+):
     problem = FUNCTIONS[function_name]
     func = problem["func"]
     bounds = problem["bounds"]
+    extra_params = get_continuous_extra_params(algorithm_name)
 
     best_costs = []
     times = []
@@ -409,7 +903,7 @@ def benchmark_algorithm(
         np.random.seed(seed)
 
         start = time.perf_counter()
-        result = run_algorithm(
+        result = run_continuous_algorithm(
             algorithm_name,
             func,
             num=num,
@@ -424,8 +918,10 @@ def benchmark_algorithm(
         times.append(elapsed)
 
     return {
+        "problem_type": "continuous",
         "algorithm": algorithm_name,
         "function": function_name,
+        "dim": dim,
         "runs": runs,
         "agents": num,
         "iterations": iterations,
@@ -437,37 +933,130 @@ def benchmark_algorithm(
     }
 
 
-def benchmark_parameter_sweep(
+def benchmark_continuous_parameter_sweep(
     algorithm_names,
     function_names,
     agent_values,
     iteration_values,
-    runs=10,
+    dim_values,
+    runs=20,
 ):
     rows = []
 
     for function_name in function_names:
+        allowed_dims = FUNCTIONS[function_name]["dims"]
+
+        for dim in dim_values:
+            if dim not in allowed_dims:
+                continue
+
+            for algorithm_name in algorithm_names:
+                for num in agent_values:
+                    for iterations in iteration_values:
+                        row = benchmark_continuous_algorithm(
+                            algorithm_name=algorithm_name,
+                            function_name=function_name,
+                            runs=runs,
+                            num=num,
+                            iterations=iterations,
+                            dim=dim,
+                        )
+                        rows.append(row)
+
+                        print(
+                            f"[CONT] {algorithm_name:8s} | {function_name:10s} | "
+                            f"dim={dim:2d} | agents={num:3d} | iter={iterations:3d} | "
+                            f"mean={row['mean_best']:.6f}"
+                        )
+
+    return rows
+
+
+# ============================================================
+# BENCHMARK - TSP
+# ============================================================
+def build_shared_tsp_instances(city_values, runs):
+    instances = {}
+    for n in city_values:
+        current = []
+        for run_idx in range(runs):
+            seed = 100000 + 1000 * n + run_idx
+            current.append(generate_cities(n, seed=seed))
+        instances[n] = current
+    return instances
+
+
+def benchmark_tsp_algorithm(
+    algorithm_name,
+    cities_list,
+    runs=20,
+    num=50,
+    iterations=100,
+):
+    extra_params = get_tsp_extra_params(algorithm_name)
+
+    best_costs = []
+    times = []
+
+    for seed in range(runs):
+        np.random.seed(seed)
+        cities = cities_list[seed]
+
+        start = time.perf_counter()
+        result = run_tsp_algorithm(
+            algorithm_name,
+            cities,
+            num=num,
+            iterations=iterations,
+            **extra_params,
+        )
+        elapsed = time.perf_counter() - start
+
+        best_costs.append(result["best_cost"])
+        times.append(elapsed)
+
+    return {
+        "problem_type": "tsp",
+        "algorithm": algorithm_name,
+        "cities": len(cities_list[0]),
+        "runs": runs,
+        "agents": num,
+        "iterations": iterations,
+        "mean_best": float(np.mean(best_costs)),
+        "std_best": float(np.std(best_costs)),
+        "min_best": float(np.min(best_costs)),
+        "max_best": float(np.max(best_costs)),
+        "mean_time": float(np.mean(times)),
+    }
+
+
+def benchmark_tsp_parameter_sweep(
+    algorithm_names,
+    shared_instances,
+    city_values,
+    agent_values,
+    iteration_values,
+    runs=20,
+):
+    rows = []
+
+    for city_count in city_values:
+        cities_list = shared_instances[city_count]
+
         for algorithm_name in algorithm_names:
             for num in agent_values:
                 for iterations in iteration_values:
-                    if algorithm_name == "pso":
-                        extra_params = {"w": 0.7, "c1": 1.5, "c2": 1.5}
-                    else:
-                        extra_params = {}
-
-                    row = benchmark_algorithm(
+                    row = benchmark_tsp_algorithm(
                         algorithm_name=algorithm_name,
-                        function_name=function_name,
+                        cities_list=cities_list,
                         runs=runs,
                         num=num,
                         iterations=iterations,
-                        dim=2,
-                        extra_params=extra_params,
                     )
                     rows.append(row)
 
                     print(
-                        f"[OK] {algorithm_name:6s} | {function_name:10s} | "
+                        f"[TSP ] {algorithm_name:8s} | cities={city_count:2d} | "
                         f"agents={num:3d} | iter={iterations:3d} | "
                         f"mean={row['mean_best']:.6f}"
                     )
@@ -475,119 +1064,216 @@ def benchmark_parameter_sweep(
     return rows
 
 
-# =========================
-# MAIN
-# =========================
-if __name__ == "__main__":
+# ============================================================
+# DEMO - CIĄGŁE
+# ============================================================
+def run_demo_continuous():
+    algorithm_name = "bso"
+    function_name = "rastrigin"
+
+    problem = FUNCTIONS[function_name]
+    func = problem["func"]
+    bounds = problem["bounds"]
+
+    X, Y, Z = make_surface(func, bounds[0], bounds[1], points=80)
+
+    start = time.perf_counter()
+
+    extra_params = get_continuous_extra_params(algorithm_name)
+    result = run_continuous_algorithm(
+        algorithm_name,
+        func,
+        num=50,
+        iterations=100,
+        dim=2,
+        bounds=bounds,
+        **extra_params,
+    )
+
+    elapsed = time.perf_counter() - start
+    history = result["history"]
+
+    print(f"Algorytm: {algorithm_name}")
+    print(f"Funkcja: {function_name}")
+    print(f"Najlepszy wynik: {result['best_cost']:.6f}")
+    print(f"Najlepsza pozycja: {result['best_position']}")
+    print(f"Czas działania: {elapsed:.4f} s")
+
+    save_gif(
+        history,
+        X,
+        Y,
+        Z,
+        filename=os.path.join(RESULTS_DIR, f"{algorithm_name}_{function_name}.gif"),
+        fps=15,
+    )
+
+    plot_convergence(
+        history,
+        algorithm_name,
+        function_name,
+        save_path=os.path.join(RESULTS_DIR, f"conv_{algorithm_name}_{function_name}.png"),
+    )
+    show_interactive_plot(history, X, Y, Z, bounds[0], bounds[1])
+
+
+# ============================================================
+# DEMO - TSP
+# ============================================================
+def run_demo_tsp():
+    cities = generate_cities(20, seed=2026)
+    save_cities_csv(cities, os.path.join(RESULTS_DIR, "demo_tsp_20_cities.csv"))
+
     np.random.seed(42)
+    dpso_result = run_tsp_algorithm("dpso_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("dpso_tsp"))
 
-    # -------------------------
-    # TRYB 1: pojedynczy pokaz
-    # -------------------------
-    DEMO_MODE = True
+    np.random.seed(42)
+    aco_result = run_tsp_algorithm("aco_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("aco_tsp"))
 
-    # -------------------------
-    # TRYB 2: benchmark do tabeli
-    # -------------------------
-    BENCHMARK_MODE = True
+    plot_tsp_route(
+        cities,
+        dpso_result["best_route"],
+        title=f"DPSO TSP, best={dpso_result['best_cost']:.3f}",
+        save_path=os.path.join(RESULTS_DIR, "demo_dpso_tsp_route.png"),
+    )
 
-    if DEMO_MODE:
-        algorithm_name = "gwo"          # "pso", "random", "gwo"
-        function_name = "rastrigin"     # "rastrigin", "eggholder", "himmelblau"
+    plot_tsp_route(
+        cities,
+        aco_result["best_route"],
+        title=f"ACO TSP, best={aco_result['best_cost']:.3f}",
+        save_path=os.path.join(RESULTS_DIR, "demo_aco_tsp_route.png"),
+    )
 
-        problem = FUNCTIONS[function_name]
-        func = problem["func"]
-        bounds = problem["bounds"]
+    plot_tsp_convergence(
+        {
+            "dpso_tsp": dpso_result["history_best"],
+            "aco_tsp": aco_result["history_best"],
+        },
+        title="Porównanie zbieżności TSP",
+        save_path=os.path.join(RESULTS_DIR, "demo_tsp_convergence.png"),
+    )
 
-        X, Y, Z = make_surface(func, bounds[0], bounds[1], points=80)
 
-        start = time.perf_counter()
-        if algorithm_name == "pso":
-            result = run_algorithm(
-                algorithm_name,
-                func,
-                num=50,
-                iterations=100,
-                dim=2,
-                bounds=bounds,
-                w=0.7,
-                c1=1.5,
-                c2=1.5,
-            )
-        else:
-            result = run_algorithm(
-                algorithm_name,
-                func,
-                num=50,
-                iterations=100,
-                dim=2,
-                bounds=bounds,
-            )
+# ============================================================
+# MAIN
+# ============================================================
+if __name__ == "__main__":
+    np.random.seed(GLOBAL_SEED)
 
-        elapsed = time.perf_counter() - start
-        history = result["history"]
+    if DEMO_MODE_CONTINUOUS:
+        run_demo_continuous()
 
-        print(f"Algorytm: {algorithm_name}")
-        print(f"Funkcja: {function_name}")
-        print(f"Najlepszy wynik: {result['best_cost']:.6f}")
-        print(f"Najlepsza pozycja: {result['best_position']}")
-        print(f"Czas działania: {elapsed:.4f} s")
+    if DEMO_MODE_TSP:
+        run_demo_tsp()
 
-        save_gif(
-            history,
-            X,
-            Y,
-            Z,
-            filename=f"{algorithm_name}_{function_name}.gif",
-            fps=15,
+    if BENCHMARK_MODE_CONTINUOUS:
+        continuous_rows = benchmark_continuous_parameter_sweep(
+            algorithm_names=["pso", "gwo", "scso", "bso"],
+            function_names=["rastrigin", "schwefel", "ackley", "eggholder", "himmelblau"],
+            agent_values=AGENT_VALUES,
+            iteration_values=ITERATION_VALUES,
+            dim_values=DIM_VALUES,
+            runs=CONTINUOUS_RUNS,
         )
 
-        plot_convergence(history, algorithm_name, function_name)
-        show_interactive_plot(history, X, Y, Z, bounds[0], bounds[1])
-
-    if BENCHMARK_MODE:
-        rows = benchmark_parameter_sweep(
-            algorithm_names=["pso", "gwo"],
-            function_names=["rastrigin", "eggholder", "himmelblau"],
-            agent_values=[20, 50, 100],
-            iteration_values=[50, 100, 200],
-            runs=10,
+        save_benchmark_csv(
+            continuous_rows,
+            filename=os.path.join(RESULTS_DIR, "benchmark_continuous_results.csv"),
         )
+        print("\nZapisano benchmark ciągły do pliku: benchmark_continuous_results.csv")
 
-        save_benchmark_csv(rows, filename="benchmark_results.csv")
-        print("\nZapisano benchmark do pliku: benchmark_results.csv")
-
-        # dodatkowy prosty pokaz porównania zbieżności dla jednej funkcji
         compare_function = "rastrigin"
         compare_problem = FUNCTIONS[compare_function]
         compare_func = compare_problem["func"]
         compare_bounds = compare_problem["bounds"]
 
         comparison_results = {}
-        for algorithm_name in ["pso", "gwo"]:
+        for algorithm_name in ["pso", "gwo", "scso", "bso"]:
             np.random.seed(42)
-            if algorithm_name == "pso":
-                result = run_algorithm(
-                    algorithm_name,
-                    compare_func,
-                    num=50,
-                    iterations=100,
-                    dim=2,
-                    bounds=compare_bounds,
-                    w=0.7,
-                    c1=1.5,
-                    c2=1.5,
-                )
-            else:
-                result = run_algorithm(
-                    algorithm_name,
-                    compare_func,
-                    num=50,
-                    iterations=100,
-                    dim=2,
-                    bounds=compare_bounds,
-                )
+            extra_params = get_continuous_extra_params(algorithm_name)
 
+            result = run_continuous_algorithm(
+                algorithm_name,
+                compare_func,
+                num=50,
+                iterations=100,
+                dim=2,
+                bounds=compare_bounds,
+                **extra_params,
+            )
             comparison_results[algorithm_name] = result
 
-        plot_multiple_convergences(comparison_results, compare_function)
+        plot_multiple_convergences(
+            comparison_results,
+            compare_function,
+            save_path=os.path.join(RESULTS_DIR, "compare_continuous_rastrigin.png"),
+        )
+
+    if BENCHMARK_MODE_TSP:
+        shared_instances = build_shared_tsp_instances(CITY_VALUES, TSP_RUNS)
+
+        for city_count, city_sets in shared_instances.items():
+            save_cities_csv(
+                city_sets[0],
+                os.path.join(RESULTS_DIR, f"tsp_cities_{city_count}_example.csv"),
+            )
+
+        tsp_rows = benchmark_tsp_parameter_sweep(
+            algorithm_names=["dpso_tsp", "aco_tsp"],
+            shared_instances=shared_instances,
+            city_values=CITY_VALUES,
+            agent_values=AGENT_VALUES,
+            iteration_values=ITERATION_VALUES,
+            runs=TSP_RUNS,
+        )
+
+        save_benchmark_csv(
+            tsp_rows,
+            filename=os.path.join(RESULTS_DIR, "benchmark_tsp_results.csv"),
+        )
+        print("\nZapisano benchmark TSP do pliku: benchmark_tsp_results.csv")
+
+        demo_cities = shared_instances[20][0]
+
+        np.random.seed(42)
+        dpso_demo = run_tsp_algorithm(
+            "dpso_tsp",
+            demo_cities,
+            num=50,
+            iterations=100,
+            **get_tsp_extra_params("dpso_tsp"),
+        )
+
+        np.random.seed(42)
+        aco_demo = run_tsp_algorithm(
+            "aco_tsp",
+            demo_cities,
+            num=50,
+            iterations=100,
+            **get_tsp_extra_params("aco_tsp"),
+        )
+
+        plot_tsp_convergence(
+            {
+                "dpso_tsp": dpso_demo["history_best"],
+                "aco_tsp": aco_demo["history_best"],
+            },
+            title="Porównanie zbieżności TSP (20 miast)",
+            save_path=os.path.join(RESULTS_DIR, "compare_tsp_20cities.png"),
+        )
+
+        plot_tsp_route(
+            demo_cities,
+            dpso_demo["best_route"],
+            title=f"DPSO TSP, 20 miast, best={dpso_demo['best_cost']:.3f}",
+            save_path=os.path.join(RESULTS_DIR, "route_dpso_20cities.png"),
+        )
+
+        plot_tsp_route(
+            demo_cities,
+            aco_demo["best_route"],
+            title=f"ACO TSP, 20 miast, best={aco_demo['best_cost']:.3f}",
+            save_path=os.path.join(RESULTS_DIR, "route_aco_20cities.png"),
+        )
+
+    print("\nGotowe.")
