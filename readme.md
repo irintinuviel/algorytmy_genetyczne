@@ -37,3 +37,11 @@ FUNCTIONS = {
 }
 ```
 Użytkownik używa tylko maina
+
+1. Przygotowanie warstwy AG
+2. AG dla funkcji ciągłych
+3. AG dla TSP
+4. Wpięcie AG do frameworka
+5. Integracja z uruchamianiem i wynikami
+6. Rozszerzenie wykresów pod AG
+7. Warianty parametrów AG
