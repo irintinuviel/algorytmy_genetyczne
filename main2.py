@@ -21,10 +21,10 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 GLOBAL_SEED = 42
 
 DEMO_MODE_CONTINUOUS = False
-DEMO_MODE_TSP = False
+DEMO_MODE_TSP = True
 
-BENCHMARK_MODE_CONTINUOUS = True
-BENCHMARK_MODE_TSP = True
+BENCHMARK_MODE_CONTINUOUS = False
+BENCHMARK_MODE_TSP = False
 
 CONTINUOUS_RUNS = 20
 TSP_RUNS = 20
@@ -597,6 +597,141 @@ def run_scso(
         "history": history,
     }
 
+# ALGORYTM GENETYCZNY
+def tournament_selection(pop, fitness, k=3):
+    idx = np.random.choice(len(pop), k, replace=False)
+    best = idx[np.argmin(fitness[idx])]
+    return pop[best].copy()
+
+
+def roulette_selection(pop, fitness):
+    inv = 1.0 / (fitness + 1e-12)
+    probs = inv / np.sum(inv)
+    idx = np.random.choice(len(pop), p=probs)
+    return pop[idx].copy()
+
+
+def ranking_selection(pop, fitness):
+    ranks = np.argsort(np.argsort(fitness))
+    probs = (len(pop) - ranks) / np.sum(len(pop) - ranks)
+    idx = np.random.choice(len(pop), p=probs)
+    return pop[idx].copy()
+
+
+def crossover_one_point(p1, p2):
+    point = np.random.randint(1, len(p1))
+    c1 = np.concatenate([p1[:point], p2[point:]])
+    c2 = np.concatenate([p2[:point], p1[point:]])
+    return c1, c2
+
+
+def crossover_two_point(p1, p2):
+    a, b = sorted(np.random.choice(len(p1), 2, replace=False))
+    c1 = p1.copy()
+    c2 = p2.copy()
+    c1[a:b], c2[a:b] = p2[a:b], p1[a:b]
+    return c1, c2
+
+
+def crossover_arithmetic(p1, p2):
+    alpha = np.random.rand()
+    return alpha * p1 + (1 - alpha) * p2, alpha * p2 + (1 - alpha) * p1
+
+
+def mutation_uniform(x, bounds, rate=0.1):
+    low, high = bounds
+    for i in range(len(x)):
+        if np.random.rand() < rate:
+            x[i] = np.random.uniform(low, high)
+    return x
+
+
+def mutation_gaussian(x, bounds, rate=0.1, sigma=0.1):
+    low, high = bounds
+    for i in range(len(x)):
+        if np.random.rand() < rate:
+            x[i] += np.random.normal(0, sigma)
+    return np.clip(x, low, high)
+
+
+def run_ga_continuous(
+    func,
+    num=50,
+    iterations=100,
+    dim=2,
+    bounds=(-5, 5),
+    selection="tournament",
+    crossover="arithmetic",
+    mutation="gaussian",
+    tournament_k=3,
+    stagnation_limit=50,
+):
+    low, high = bounds
+    pop = np.random.uniform(low, high, (num, dim))
+    fitness = np.array([func(ind) for ind in pop])
+
+    best_idx = np.argmin(fitness)
+    best = pop[best_idx].copy()
+    best_cost = fitness[best_idx]
+
+    history = []
+    stagnation = 0
+
+    for _ in range(iterations):
+        new_pop = []
+
+        while len(new_pop) < num:
+            # SELECTION
+            if selection == "roulette":
+                p1 = roulette_selection(pop, fitness)
+                p2 = roulette_selection(pop, fitness)
+            elif selection == "ranking":
+                p1 = ranking_selection(pop, fitness)
+                p2 = ranking_selection(pop, fitness)
+            else:
+                p1 = tournament_selection(pop, fitness, tournament_k)
+                p2 = tournament_selection(pop, fitness, tournament_k)
+
+            # CROSSOVER
+            if crossover == "one_point":
+                c1, c2 = crossover_one_point(p1, p2)
+            elif crossover == "two_point":
+                c1, c2 = crossover_two_point(p1, p2)
+            else:
+                c1, c2 = crossover_arithmetic(p1, p2)
+
+            # MUTATION
+            if mutation == "uniform":
+                c1 = mutation_uniform(c1, bounds)
+                c2 = mutation_uniform(c2, bounds)
+            else:
+                c1 = mutation_gaussian(c1, bounds)
+                c2 = mutation_gaussian(c2, bounds)
+
+            new_pop.extend([c1, c2])
+
+        pop = np.array(new_pop[:num])
+        fitness = np.array([func(ind) for ind in pop])
+
+        idx = np.argmin(fitness)
+        if fitness[idx] < best_cost:
+            best_cost = fitness[idx]
+            best = pop[idx].copy()
+            stagnation = 0
+        else:
+            stagnation += 1
+
+        history.append(make_history_state(pop, best, best_cost, func))
+
+        if stagnation >= stagnation_limit:
+            break
+
+    return {
+        "best_position": best,
+        "best_cost": float(best_cost),
+        "history": history,
+    }
+
 
 # ============================================================
 # TSP - NARZĘDZIA
@@ -824,6 +959,137 @@ def run_aco_tsp(
         "history_best": history_best,
     }
 
+# ALGORYTM GENETYCZNY
+
+def pmx(parent1, parent2):
+    size = len(parent1)
+    a, b = sorted(np.random.choice(size, 2, replace=False))
+
+    child = [-1] * size
+    child[a:b] = parent1[a:b]
+
+    for i in range(a, b):
+        if parent2[i] not in child:
+            pos = i
+            val = parent2[i]
+            while True:
+                pos = np.where(parent2 == parent1[pos])[0][0]
+                if child[pos] == -1:
+                    child[pos] = val
+                    break
+
+    for i in range(size):
+        if child[i] == -1:
+            child[i] = parent2[i]
+
+    return np.array(child)
+
+
+def ox(parent1, parent2):
+    size = len(parent1)
+    a, b = sorted(np.random.choice(size, 2, replace=False))
+
+    child = [-1] * size
+    child[a:b] = parent1[a:b]
+
+    fill = [x for x in parent2 if x not in child]
+    ptr = 0
+
+    for i in range(size):
+        if child[i] == -1:
+            child[i] = fill[ptr]
+            ptr += 1
+
+    return np.array(child)
+
+
+def mutate_swap(route):
+    i, j = np.random.choice(len(route), 2, replace=False)
+    route[i], route[j] = route[j], route[i]
+    return route
+
+
+def mutate_inverse(route):
+    i, j = sorted(np.random.choice(len(route), 2, replace=False))
+    route[i:j] = route[i:j][::-1]
+    return route
+
+
+def run_ga_tsp(
+    cities,
+    num=50,
+    iterations=100,
+    selection="tournament",
+    crossover="ox",
+    mutation="swap",
+    tournament_k=3,
+    stagnation_limit=50,
+):
+    n = len(cities)
+    pop = [random_route(n) for _ in range(num)]
+    fitness = np.array([route_length(p, cities) for p in pop])
+
+    best_idx = np.argmin(fitness)
+    best = pop[best_idx].copy()
+    best_cost = fitness[best_idx]
+
+    history_best = []
+    stagnation = 0
+
+    for _ in range(iterations):
+        new_pop = []
+
+        while len(new_pop) < num:
+            # SELECTION
+            if selection == "roulette":
+                p1 = roulette_selection(pop, fitness)
+                p2 = roulette_selection(pop, fitness)
+            elif selection == "ranking":
+                p1 = ranking_selection(pop, fitness)
+                p2 = ranking_selection(pop, fitness)
+            else:
+                p1 = tournament_selection(pop, fitness, tournament_k)
+                p2 = tournament_selection(pop, fitness, tournament_k)
+
+            # CROSSOVER
+            if crossover == "pmx":
+                c1 = pmx(p1, p2)
+                c2 = pmx(p2, p1)
+            else:
+                c1 = ox(p1, p2)
+                c2 = ox(p2, p1)
+
+            # MUTATION
+            if mutation == "inverse":
+                c1 = mutate_inverse(c1)
+                c2 = mutate_inverse(c2)
+            else:
+                c1 = mutate_swap(c1)
+                c2 = mutate_swap(c2)
+
+            new_pop.extend([c1, c2])
+
+        pop = new_pop[:num]
+        fitness = np.array([route_length(p, cities) for p in pop])
+
+        idx = np.argmin(fitness)
+        if fitness[idx] < best_cost:
+            best_cost = fitness[idx]
+            best = pop[idx].copy()
+            stagnation = 0
+        else:
+            stagnation += 1
+
+        history_best.append(best_cost)
+
+        if stagnation >= stagnation_limit:
+            break
+
+    return {
+        "best_route": best,
+        "best_cost": float(best_cost),
+        "history_best": history_best,
+    }
 
 # ============================================================
 # WYBÓR ALGORYTMU
@@ -833,11 +1099,13 @@ CONTINUOUS_ALGORITHMS = {
     "gwo": run_gwo,
     "scso": run_scso,
     "bso": run_bso,
+    "ga": run_ga_continuous,
 }
 
 TSP_ALGORITHMS = {
     "dpso_tsp": run_dpso_tsp,
     "aco_tsp": run_aco_tsp,
+    "ga_tsp": run_ga_tsp,
 }
 
 
@@ -1068,8 +1336,8 @@ def benchmark_tsp_parameter_sweep(
 # DEMO - CIĄGŁE
 # ============================================================
 def run_demo_continuous():
-    algorithm_name = "bso"
-    function_name = "rastrigin"
+    algorithm_name = "ga"
+    function_name = "himmelblau"
 
     problem = FUNCTIONS[function_name]
     func = problem["func"]
@@ -1130,6 +1398,9 @@ def run_demo_tsp():
     np.random.seed(42)
     aco_result = run_tsp_algorithm("aco_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("aco_tsp"))
 
+    np.random.seed(42)
+    ga_result = run_tsp_algorithm("ga_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("ga_tsp"))
+
     plot_tsp_route(
         cities,
         dpso_result["best_route"],
@@ -1144,10 +1415,18 @@ def run_demo_tsp():
         save_path=os.path.join(RESULTS_DIR, "demo_aco_tsp_route.png"),
     )
 
+    plot_tsp_route(
+        cities,
+        ga_result["best_route"],
+        title=f"GA TSP, best={ga_result['best_cost']:.3f}",
+        save_path=os.path.join(RESULTS_DIR, "demo_ga_tsp_route.png"),
+    )
+
     plot_tsp_convergence(
         {
             "dpso_tsp": dpso_result["history_best"],
             "aco_tsp": aco_result["history_best"],
+            "ga_tsp": ga_result["history_best"],
         },
         title="Porównanie zbieżności TSP",
         save_path=os.path.join(RESULTS_DIR, "demo_tsp_convergence.png"),
