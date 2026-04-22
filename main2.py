@@ -1,11 +1,14 @@
 import os
 import csv
 import time
-import math
 import numpy as np
 import matplotlib
 
-matplotlib.use("TkAgg")
+# Fallback: backend interaktywny lokalnie, zapisowy dla środowisk headless
+try:
+    matplotlib.use("TkAgg")
+except Exception:
+    matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
@@ -26,6 +29,9 @@ DEMO_MODE_TSP = True
 BENCHMARK_MODE_CONTINUOUS = False
 BENCHMARK_MODE_TSP = False
 
+GA_VARIANT_BENCHMARK_CONTINUOUS = False
+GA_VARIANT_BENCHMARK_TSP = False
+
 CONTINUOUS_RUNS = 20
 TSP_RUNS = 20
 
@@ -34,13 +40,17 @@ ITERATION_VALUES = [50, 100, 200]
 DIM_VALUES = [2, 5, 10]
 CITY_VALUES = [10, 20, 50]
 
+GA_SELECTION_VALUES = ["tournament", "roulette"]
+GA_PC_VALUES = [0.6, 0.8, 1.0]
+GA_PM_VALUES = [0.01, 0.05, 0.1]
+
 
 # ============================================================
 # FUNKCJE CELU
 # ============================================================
 def rastrigin(x):
     x = np.array(x, dtype=float)
-    return 10 * len(x) + np.sum(x ** 2 - 10 * np.cos(2 * np.pi * x))
+    return 10 * len(x) + np.sum(x**2 - 10 * np.cos(2 * np.pi * x))
 
 
 def schwefel(x):
@@ -51,7 +61,7 @@ def schwefel(x):
 def ackley(x):
     x = np.array(x, dtype=float)
     n = len(x)
-    s1 = np.sum(x ** 2)
+    s1 = np.sum(x**2)
     s2 = np.sum(np.cos(2 * np.pi * x))
     return -20 * np.exp(-0.2 * np.sqrt(s1 / n)) - np.exp(s2 / n) + 20 + np.e
 
@@ -65,7 +75,7 @@ def eggholder(x):
 
 def himmelblau(x):
     x1, x2 = x
-    return (x1 ** 2 + x2 - 11) ** 2 + (x1 + x2 ** 2 - 7) ** 2
+    return (x1**2 + x2 - 11) ** 2 + (x1 + x2**2 - 7) ** 2
 
 
 FUNCTIONS = {
@@ -263,6 +273,24 @@ def plot_multiple_convergences(results, function_name, save_path=None):
         plt.show()
 
 
+def plot_ga_convergence(best_values, mean_values, title, save_path=None):
+    plt.figure(figsize=(8, 5))
+    plt.plot(best_values, label="best")
+    plt.plot(mean_values, label="mean population")
+    plt.xlabel("Iteracja")
+    plt.ylabel("Wartość")
+    plt.title(title)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    else:
+        plt.show()
+
+
 def plot_tsp_route(cities, route, title="TSP route", save_path=None):
     ordered = cities[route]
     closed = np.vstack([ordered, ordered[0]])
@@ -303,6 +331,32 @@ def plot_tsp_convergence(histories, title="TSP convergence", save_path=None):
         plt.close()
     else:
         plt.show()
+
+
+def save_tsp_gif(cities, route_history, filename="tsp.gif", fps=10):
+    fig, ax = plt.subplots(figsize=(7, 7))
+    writer = PillowWriter(fps=fps)
+
+    with writer.saving(fig, filename, dpi=100):
+        for i, route in enumerate(route_history):
+            ax.clear()
+            ordered = cities[route]
+            closed = np.vstack([ordered, ordered[0]])
+
+            ax.scatter(cities[:, 0], cities[:, 1], s=40)
+            ax.plot(closed[:, 0], closed[:, 1], linewidth=1.5)
+
+            for j, (x, y) in enumerate(cities):
+                ax.text(x, y, str(j), fontsize=8)
+
+            cost = route_length(route, cities)
+            ax.set_title(f"Iteracja {i}, best={cost:.3f}")
+            ax.set_xlabel("x")
+            ax.set_ylabel("y")
+            fig.tight_layout()
+            writer.grab_frame()
+
+    plt.close(fig)
 
 
 # ============================================================
@@ -597,7 +651,10 @@ def run_scso(
         "history": history,
     }
 
-# ALGORYTM GENETYCZNY
+
+# ============================================================
+# ALGORYTM GENETYCZNY - OPERATORY WSPÓLNE
+# ============================================================
 def tournament_selection(pop, fitness, k=3):
     idx = np.random.choice(len(pop), k, replace=False)
     best = idx[np.argmin(fitness[idx])]
@@ -640,6 +697,7 @@ def crossover_arithmetic(p1, p2):
 
 def mutation_uniform(x, bounds, rate=0.1):
     low, high = bounds
+    x = x.copy()
     for i in range(len(x)):
         if np.random.rand() < rate:
             x[i] = np.random.uniform(low, high)
@@ -648,6 +706,7 @@ def mutation_uniform(x, bounds, rate=0.1):
 
 def mutation_gaussian(x, bounds, rate=0.1, sigma=0.1):
     low, high = bounds
+    x = x.copy()
     for i in range(len(x)):
         if np.random.rand() < rate:
             x[i] += np.random.normal(0, sigma)
@@ -665,6 +724,10 @@ def run_ga_continuous(
     mutation="gaussian",
     tournament_k=3,
     stagnation_limit=50,
+    pc=0.8,
+    pm=0.05,
+    sigma=0.1,
+    elitism=1,
 ):
     low, high = bounds
     pop = np.random.uniform(low, high, (num, dim))
@@ -675,13 +738,16 @@ def run_ga_continuous(
     best_cost = fitness[best_idx]
 
     history = []
+    history_mean = []
     stagnation = 0
 
     for _ in range(iterations):
         new_pop = []
 
-        while len(new_pop) < num:
-            # SELECTION
+        elite_idx = np.argsort(fitness)[:elitism]
+        elites = [pop[i].copy() for i in elite_idx]
+
+        while len(new_pop) < num - elitism:
             if selection == "roulette":
                 p1 = roulette_selection(pop, fitness)
                 p2 = roulette_selection(pop, fitness)
@@ -692,25 +758,26 @@ def run_ga_continuous(
                 p1 = tournament_selection(pop, fitness, tournament_k)
                 p2 = tournament_selection(pop, fitness, tournament_k)
 
-            # CROSSOVER
-            if crossover == "one_point":
-                c1, c2 = crossover_one_point(p1, p2)
-            elif crossover == "two_point":
-                c1, c2 = crossover_two_point(p1, p2)
+            if np.random.rand() < pc:
+                if crossover == "one_point":
+                    c1, c2 = crossover_one_point(p1, p2)
+                elif crossover == "two_point":
+                    c1, c2 = crossover_two_point(p1, p2)
+                else:
+                    c1, c2 = crossover_arithmetic(p1, p2)
             else:
-                c1, c2 = crossover_arithmetic(p1, p2)
+                c1, c2 = p1.copy(), p2.copy()
 
-            # MUTATION
             if mutation == "uniform":
-                c1 = mutation_uniform(c1, bounds)
-                c2 = mutation_uniform(c2, bounds)
+                c1 = mutation_uniform(c1, bounds, rate=pm)
+                c2 = mutation_uniform(c2, bounds, rate=pm)
             else:
-                c1 = mutation_gaussian(c1, bounds)
-                c2 = mutation_gaussian(c2, bounds)
+                c1 = mutation_gaussian(c1, bounds, rate=pm, sigma=sigma)
+                c2 = mutation_gaussian(c2, bounds, rate=pm, sigma=sigma)
 
             new_pop.extend([c1, c2])
 
-        pop = np.array(new_pop[:num])
+        pop = np.array(elites + new_pop[: num - elitism])
         fitness = np.array([func(ind) for ind in pop])
 
         idx = np.argmin(fitness)
@@ -722,6 +789,7 @@ def run_ga_continuous(
             stagnation += 1
 
         history.append(make_history_state(pop, best, best_cost, func))
+        history_mean.append(float(np.mean(fitness)))
 
         if stagnation >= stagnation_limit:
             break
@@ -730,6 +798,7 @@ def run_ga_continuous(
         "best_position": best,
         "best_cost": float(best_cost),
         "history": history,
+        "history_mean": history_mean,
     }
 
 
@@ -940,7 +1009,7 @@ def run_aco_tsp(
                 best_cost = float(cost)
                 best_route = route.copy()
 
-        pheromone *= (1.0 - evaporation)
+        pheromone *= 1.0 - evaporation
         pheromone = np.maximum(pheromone, 1e-12)
 
         for route, cost in zip(all_routes, all_costs):
@@ -959,8 +1028,10 @@ def run_aco_tsp(
         "history_best": history_best,
     }
 
-# ALGORYTM GENETYCZNY
 
+# ============================================================
+# ALGORYTM GENETYCZNY - TSP
+# ============================================================
 def pmx(parent1, parent2):
     size = len(parent1)
     a, b = sorted(np.random.choice(size, 2, replace=False))
@@ -1003,15 +1074,19 @@ def ox(parent1, parent2):
     return np.array(child)
 
 
-def mutate_swap(route):
-    i, j = np.random.choice(len(route), 2, replace=False)
-    route[i], route[j] = route[j], route[i]
+def mutate_swap(route, rate=0.05):
+    route = route.copy()
+    if np.random.rand() < rate:
+        i, j = np.random.choice(len(route), 2, replace=False)
+        route[i], route[j] = route[j], route[i]
     return route
 
 
-def mutate_inverse(route):
-    i, j = sorted(np.random.choice(len(route), 2, replace=False))
-    route[i:j] = route[i:j][::-1]
+def mutate_inverse(route, rate=0.05):
+    route = route.copy()
+    if np.random.rand() < rate:
+        i, j = sorted(np.random.choice(len(route), 2, replace=False))
+        route[i:j] = route[i:j][::-1]
     return route
 
 
@@ -1024,6 +1099,9 @@ def run_ga_tsp(
     mutation="swap",
     tournament_k=3,
     stagnation_limit=50,
+    pc=0.8,
+    pm=0.05,
+    elitism=1,
 ):
     n = len(cities)
     pop = [random_route(n) for _ in range(num)]
@@ -1034,13 +1112,17 @@ def run_ga_tsp(
     best_cost = fitness[best_idx]
 
     history_best = []
+    history_mean = []
+    route_history_best = [best.copy()]
     stagnation = 0
 
     for _ in range(iterations):
         new_pop = []
 
-        while len(new_pop) < num:
-            # SELECTION
+        elite_idx = np.argsort(fitness)[:elitism]
+        elites = [pop[i].copy() for i in elite_idx]
+
+        while len(new_pop) < num - elitism:
             if selection == "roulette":
                 p1 = roulette_selection(pop, fitness)
                 p2 = roulette_selection(pop, fitness)
@@ -1051,25 +1133,26 @@ def run_ga_tsp(
                 p1 = tournament_selection(pop, fitness, tournament_k)
                 p2 = tournament_selection(pop, fitness, tournament_k)
 
-            # CROSSOVER
-            if crossover == "pmx":
-                c1 = pmx(p1, p2)
-                c2 = pmx(p2, p1)
+            if np.random.rand() < pc:
+                if crossover == "pmx":
+                    c1 = pmx(p1, p2)
+                    c2 = pmx(p2, p1)
+                else:
+                    c1 = ox(p1, p2)
+                    c2 = ox(p2, p1)
             else:
-                c1 = ox(p1, p2)
-                c2 = ox(p2, p1)
+                c1, c2 = p1.copy(), p2.copy()
 
-            # MUTATION
             if mutation == "inverse":
-                c1 = mutate_inverse(c1)
-                c2 = mutate_inverse(c2)
+                c1 = mutate_inverse(c1, rate=pm)
+                c2 = mutate_inverse(c2, rate=pm)
             else:
-                c1 = mutate_swap(c1)
-                c2 = mutate_swap(c2)
+                c1 = mutate_swap(c1, rate=pm)
+                c2 = mutate_swap(c2, rate=pm)
 
             new_pop.extend([c1, c2])
 
-        pop = new_pop[:num]
+        pop = elites + new_pop[: num - elitism]
         fitness = np.array([route_length(p, cities) for p in pop])
 
         idx = np.argmin(fitness)
@@ -1080,7 +1163,9 @@ def run_ga_tsp(
         else:
             stagnation += 1
 
-        history_best.append(best_cost)
+        history_best.append(float(best_cost))
+        history_mean.append(float(np.mean(fitness)))
+        route_history_best.append(best.copy())
 
         if stagnation >= stagnation_limit:
             break
@@ -1089,13 +1174,17 @@ def run_ga_tsp(
         "best_route": best,
         "best_cost": float(best_cost),
         "history_best": history_best,
+        "history_mean": history_mean,
+        "route_history_best": route_history_best,
     }
+
 
 # ============================================================
 # WYBÓR ALGORYTMU
 # ============================================================
 CONTINUOUS_ALGORITHMS = {
     "pso": run_pso,
+    "random_search": run_random_search,
     "gwo": run_gwo,
     "scso": run_scso,
     "bso": run_bso,
@@ -1133,6 +1222,18 @@ def get_continuous_extra_params(algorithm_name):
         return {"w": 0.7, "c1": 1.5, "c2": 1.5}
     if key == "bso":
         return {"k_clusters": 5, "p_replace": 0.1}
+    if key == "ga":
+        return {
+            "selection": "tournament",
+            "crossover": "arithmetic",
+            "mutation": "gaussian",
+            "tournament_k": 3,
+            "pc": 0.8,
+            "pm": 0.05,
+            "sigma": 0.1,
+            "elitism": 1,
+            "stagnation_limit": 50,
+        }
 
     return {}
 
@@ -1144,6 +1245,17 @@ def get_tsp_extra_params(algorithm_name):
         return {"inertia_keep": 0.6, "c1": 0.8, "c2": 0.9}
     if key == "aco_tsp":
         return {"alpha": 1.0, "beta": 3.0, "evaporation": 0.5, "q": 100.0}
+    if key == "ga_tsp":
+        return {
+            "selection": "tournament",
+            "crossover": "ox",
+            "mutation": "swap",
+            "tournament_k": 3,
+            "pc": 0.8,
+            "pm": 0.05,
+            "elitism": 1,
+            "stagnation_limit": 50,
+        }
 
     return {}
 
@@ -1232,10 +1344,72 @@ def benchmark_continuous_parameter_sweep(
                         rows.append(row)
 
                         print(
-                            f"[CONT] {algorithm_name:8s} | {function_name:10s} | "
+                            f"[CONT] {algorithm_name:12s} | {function_name:10s} | "
                             f"dim={dim:2d} | agents={num:3d} | iter={iterations:3d} | "
                             f"mean={row['mean_best']:.6f}"
                         )
+
+    return rows
+
+
+def benchmark_ga_continuous_variants(function_name, dim, runs=20):
+    rows = []
+    problem = FUNCTIONS[function_name]
+    func = problem["func"]
+    bounds = problem["bounds"]
+
+    for selection in GA_SELECTION_VALUES:
+        for pc in GA_PC_VALUES:
+            for pm in GA_PM_VALUES:
+                for num in AGENT_VALUES:
+                    best_costs = []
+                    times = []
+
+                    for seed in range(runs):
+                        np.random.seed(seed)
+                        start = time.perf_counter()
+
+                        result = run_ga_continuous(
+                            func,
+                            num=num,
+                            iterations=100,
+                            dim=dim,
+                            bounds=bounds,
+                            selection=selection,
+                            crossover="arithmetic",
+                            mutation="gaussian",
+                            pc=pc,
+                            pm=pm,
+                            sigma=0.1,
+                        )
+
+                        elapsed = time.perf_counter() - start
+                        best_costs.append(result["best_cost"])
+                        times.append(elapsed)
+
+                    rows.append(
+                        {
+                            "problem_type": "continuous_ga_variants",
+                            "function": function_name,
+                            "dim": dim,
+                            "selection": selection,
+                            "pc": pc,
+                            "pm": pm,
+                            "agents": num,
+                            "runs": runs,
+                            "mean_best": float(np.mean(best_costs)),
+                            "std_best": float(np.std(best_costs)),
+                            "min_best": float(np.min(best_costs)),
+                            "max_best": float(np.max(best_costs)),
+                            "mean_time": float(np.mean(times)),
+                        }
+                    )
+
+                    print(
+                        f"[GA-CONT] {function_name:10s} | dim={dim:2d} | "
+                        f"sel={selection:10s} | pc={pc:.2f} | pm={pm:.2f} | "
+                        f"agents={num:3d}"
+                    )
 
     return rows
 
@@ -1324,9 +1498,65 @@ def benchmark_tsp_parameter_sweep(
                     rows.append(row)
 
                     print(
-                        f"[TSP ] {algorithm_name:8s} | cities={city_count:2d} | "
+                        f"[TSP ] {algorithm_name:12s} | cities={city_count:2d} | "
                         f"agents={num:3d} | iter={iterations:3d} | "
                         f"mean={row['mean_best']:.6f}"
+                    )
+
+    return rows
+
+
+def benchmark_ga_tsp_variants(cities_list, runs=20):
+    rows = []
+
+    for selection in GA_SELECTION_VALUES:
+        for pc in GA_PC_VALUES:
+            for pm in GA_PM_VALUES:
+                for num in AGENT_VALUES:
+                    best_costs = []
+                    times = []
+
+                    for seed in range(runs):
+                        np.random.seed(seed)
+                        cities = cities_list[seed]
+                        start = time.perf_counter()
+
+                        result = run_ga_tsp(
+                            cities,
+                            num=num,
+                            iterations=100,
+                            selection=selection,
+                            crossover="ox",
+                            mutation="swap",
+                            pc=pc,
+                            pm=pm,
+                        )
+
+                        elapsed = time.perf_counter() - start
+                        best_costs.append(result["best_cost"])
+                        times.append(elapsed)
+
+                    rows.append(
+                        {
+                            "problem_type": "tsp_ga_variants",
+                            "cities": len(cities_list[0]),
+                            "selection": selection,
+                            "pc": pc,
+                            "pm": pm,
+                            "agents": num,
+                            "runs": runs,
+                            "mean_best": float(np.mean(best_costs)),
+                            "std_best": float(np.std(best_costs)),
+                            "min_best": float(np.min(best_costs)),
+                            "max_best": float(np.max(best_costs)),
+                            "mean_time": float(np.mean(times)),
+                        }
+                    )
+
+                    print(
+                        f"[GA-TSP ] cities={len(cities_list[0]):2d} | "
+                        f"sel={selection:10s} | pc={pc:.2f} | pm={pm:.2f} | "
+                        f"agents={num:3d}"
                     )
 
     return rows
@@ -1382,6 +1612,14 @@ def run_demo_continuous():
         function_name,
         save_path=os.path.join(RESULTS_DIR, f"conv_{algorithm_name}_{function_name}.png"),
     )
+
+    plot_ga_convergence(
+        [state["best_cost"] for state in history],
+        result["history_mean"],
+        title=f"GA best vs mean / {function_name}",
+        save_path=os.path.join(RESULTS_DIR, f"ga_best_mean_{function_name}.png"),
+    )
+
     show_interactive_plot(history, X, Y, Z, bounds[0], bounds[1])
 
 
@@ -1393,13 +1631,31 @@ def run_demo_tsp():
     save_cities_csv(cities, os.path.join(RESULTS_DIR, "demo_tsp_20_cities.csv"))
 
     np.random.seed(42)
-    dpso_result = run_tsp_algorithm("dpso_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("dpso_tsp"))
+    dpso_result = run_tsp_algorithm(
+        "dpso_tsp",
+        cities,
+        num=50,
+        iterations=100,
+        **get_tsp_extra_params("dpso_tsp"),
+    )
 
     np.random.seed(42)
-    aco_result = run_tsp_algorithm("aco_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("aco_tsp"))
+    aco_result = run_tsp_algorithm(
+        "aco_tsp",
+        cities,
+        num=50,
+        iterations=100,
+        **get_tsp_extra_params("aco_tsp"),
+    )
 
     np.random.seed(42)
-    ga_result = run_tsp_algorithm("ga_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("ga_tsp"))
+    ga_result = run_tsp_algorithm(
+        "ga_tsp",
+        cities,
+        num=50,
+        iterations=100,
+        **get_tsp_extra_params("ga_tsp"),
+    )
 
     plot_tsp_route(
         cities,
@@ -1432,6 +1688,20 @@ def run_demo_tsp():
         save_path=os.path.join(RESULTS_DIR, "demo_tsp_convergence.png"),
     )
 
+    plot_ga_convergence(
+        ga_result["history_best"],
+        ga_result["history_mean"],
+        title="GA TSP: best vs mean",
+        save_path=os.path.join(RESULTS_DIR, "demo_ga_tsp_best_vs_mean.png"),
+    )
+
+    save_tsp_gif(
+        cities,
+        ga_result["route_history_best"],
+        filename=os.path.join(RESULTS_DIR, "demo_ga_tsp.gif"),
+        fps=10,
+    )
+
 
 # ============================================================
 # MAIN
@@ -1447,7 +1717,7 @@ if __name__ == "__main__":
 
     if BENCHMARK_MODE_CONTINUOUS:
         continuous_rows = benchmark_continuous_parameter_sweep(
-            algorithm_names=["pso", "gwo", "scso", "bso"],
+            algorithm_names=["pso", "gwo", "scso", "bso", "ga"],
             function_names=["rastrigin", "schwefel", "ackley", "eggholder", "himmelblau"],
             agent_values=AGENT_VALUES,
             iteration_values=ITERATION_VALUES,
@@ -1467,7 +1737,7 @@ if __name__ == "__main__":
         compare_bounds = compare_problem["bounds"]
 
         comparison_results = {}
-        for algorithm_name in ["pso", "gwo", "scso", "bso"]:
+        for algorithm_name in ["pso", "gwo", "scso", "bso", "ga"]:
             np.random.seed(42)
             extra_params = get_continuous_extra_params(algorithm_name)
 
@@ -1488,6 +1758,24 @@ if __name__ == "__main__":
             save_path=os.path.join(RESULTS_DIR, "compare_continuous_rastrigin.png"),
         )
 
+        np.random.seed(42)
+        ga_compare = run_continuous_algorithm(
+            "ga",
+            compare_func,
+            num=50,
+            iterations=100,
+            dim=2,
+            bounds=compare_bounds,
+            **get_continuous_extra_params("ga"),
+        )
+
+        plot_ga_convergence(
+            [state["best_cost"] for state in ga_compare["history"]],
+            ga_compare["history_mean"],
+            title=f"GA best vs mean / {compare_function}",
+            save_path=os.path.join(RESULTS_DIR, "ga_best_vs_mean_rastrigin.png"),
+        )
+
     if BENCHMARK_MODE_TSP:
         shared_instances = build_shared_tsp_instances(CITY_VALUES, TSP_RUNS)
 
@@ -1498,7 +1786,7 @@ if __name__ == "__main__":
             )
 
         tsp_rows = benchmark_tsp_parameter_sweep(
-            algorithm_names=["dpso_tsp", "aco_tsp"],
+            algorithm_names=["dpso_tsp", "aco_tsp", "ga_tsp"],
             shared_instances=shared_instances,
             city_values=CITY_VALUES,
             agent_values=AGENT_VALUES,
@@ -1532,10 +1820,20 @@ if __name__ == "__main__":
             **get_tsp_extra_params("aco_tsp"),
         )
 
+        np.random.seed(42)
+        ga_demo = run_tsp_algorithm(
+            "ga_tsp",
+            demo_cities,
+            num=50,
+            iterations=100,
+            **get_tsp_extra_params("ga_tsp"),
+        )
+
         plot_tsp_convergence(
             {
                 "dpso_tsp": dpso_demo["history_best"],
                 "aco_tsp": aco_demo["history_best"],
+                "ga_tsp": ga_demo["history_best"],
             },
             title="Porównanie zbieżności TSP (20 miast)",
             save_path=os.path.join(RESULTS_DIR, "compare_tsp_20cities.png"),
@@ -1554,5 +1852,63 @@ if __name__ == "__main__":
             title=f"ACO TSP, 20 miast, best={aco_demo['best_cost']:.3f}",
             save_path=os.path.join(RESULTS_DIR, "route_aco_20cities.png"),
         )
+
+        plot_tsp_route(
+            demo_cities,
+            ga_demo["best_route"],
+            title=f"GA TSP, 20 miast, best={ga_demo['best_cost']:.3f}",
+            save_path=os.path.join(RESULTS_DIR, "route_ga_20cities.png"),
+        )
+
+        plot_ga_convergence(
+            ga_demo["history_best"],
+            ga_demo["history_mean"],
+            title="GA TSP (20 miast): best vs mean",
+            save_path=os.path.join(RESULTS_DIR, "ga_tsp_20cities_best_vs_mean.png"),
+        )
+
+        save_tsp_gif(
+            demo_cities,
+            ga_demo["route_history_best"],
+            filename=os.path.join(RESULTS_DIR, "ga_tsp_20cities.gif"),
+            fps=10,
+        )
+
+    if GA_VARIANT_BENCHMARK_CONTINUOUS:
+        rows = []
+        for function_name in ["rastrigin", "ackley", "himmelblau"]:
+            for dim in FUNCTIONS[function_name]["dims"]:
+                if dim in [2, 5, 10]:
+                    rows.extend(
+                        benchmark_ga_continuous_variants(
+                            function_name=function_name,
+                            dim=dim,
+                            runs=CONTINUOUS_RUNS,
+                        )
+                    )
+
+        save_benchmark_csv(
+            rows,
+            filename=os.path.join(RESULTS_DIR, "benchmark_ga_continuous_variants.csv"),
+        )
+        print("\nZapisano benchmark wariantów GA continuous do pliku: benchmark_ga_continuous_variants.csv")
+
+    if GA_VARIANT_BENCHMARK_TSP:
+        shared_instances = build_shared_tsp_instances(CITY_VALUES, TSP_RUNS)
+        rows = []
+
+        for city_count in CITY_VALUES:
+            rows.extend(
+                benchmark_ga_tsp_variants(
+                    shared_instances[city_count],
+                    runs=TSP_RUNS,
+                )
+            )
+
+        save_benchmark_csv(
+            rows,
+            filename=os.path.join(RESULTS_DIR, "benchmark_ga_tsp_variants.csv"),
+        )
+        print("\nZapisano benchmark wariantów GA TSP do pliku: benchmark_ga_tsp_variants.csv")
 
     print("\nGotowe.")
