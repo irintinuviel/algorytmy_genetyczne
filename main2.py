@@ -1,11 +1,15 @@
+
 import os
 import csv
 import time
-import math
 import numpy as np
 import matplotlib
 
-matplotlib.use("TkAgg")
+# Fallback: interaktywny backend lokalnie, zwykły backend do zapisu na serwerze/headless
+try:
+    matplotlib.use("TkAgg")
+except Exception:
+    matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
@@ -367,36 +371,6 @@ def run_pso(
     }
 
 
-def run_random_search(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
-    range_min, range_max = bounds
-
-    positions = np.random.uniform(range_min, range_max, (num, dim))
-    costs = np.array([func(p) for p in positions])
-
-    best_idx = np.argmin(costs)
-    best = positions[best_idx].copy()
-    best_cost = costs[best_idx]
-
-    history = []
-
-    for _ in range(iterations):
-        positions = np.random.uniform(range_min, range_max, (num, dim))
-        costs = np.array([func(p) for p in positions])
-
-        idx = np.argmin(costs)
-        if costs[idx] < best_cost:
-            best_cost = costs[idx]
-            best = positions[idx].copy()
-
-        history.append(make_history_state(positions, best, best_cost, func))
-
-    return {
-        "history": history,
-        "best_position": best.copy(),
-        "best_cost": float(best_cost),
-    }
-
-
 def run_gwo(func, num=50, iterations=100, dim=2, bounds=(-5.12, 5.12)):
     range_min, range_max = bounds
 
@@ -533,7 +507,7 @@ def run_bso(
         history.append(make_history_state(positions, best_position, best_cost, func))
 
     return {
-        "best_position": best_position,
+        "best_position": best_position.copy(),
         "best_cost": float(best_cost),
         "history": history,
     }
@@ -592,7 +566,7 @@ def run_scso(
         history.append(make_history_state(positions, best_position, best_cost, func))
 
     return {
-        "best_position": best_position,
+        "best_position": best_position.copy(),
         "best_cost": float(best_cost),
         "history": history,
     }
@@ -760,204 +734,88 @@ def route_length(route, cities):
     return float(total)
 
 
-def pairwise_distances(cities):
-    n = len(cities)
-    D = np.zeros((n, n), dtype=float)
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                D[i, j] = np.linalg.norm(cities[i] - cities[j])
-    return D
+def keys_to_route(keys):
+    keys = np.asarray(keys, dtype=float)
+    return np.argsort(keys, kind="mergesort")
 
 
-def random_route(n):
-    return np.random.permutation(n)
-
-
-def permutation_to_swaps(source, target):
-    arr = source.copy()
-    pos = {value: idx for idx, value in enumerate(arr)}
-    swaps = []
-
-    for i in range(len(arr)):
-        if arr[i] != target[i]:
-            j = pos[target[i]]
-            swaps.append((i, j))
-
-            pos[arr[i]] = j
-            pos[arr[j]] = i
-            arr[i], arr[j] = arr[j], arr[i]
-
-    return swaps
-
-
-def apply_swaps(route, swaps):
-    r = route.copy()
-    for i, j in swaps:
-        r[i], r[j] = r[j], r[i]
-    return r
-
-
-def sample_swaps(swaps, probability):
-    if probability <= 0:
-        return []
-    chosen = []
-    for swap in swaps:
-        if np.random.rand() < probability:
-            chosen.append(swap)
-    return chosen
+def route_cost_from_keys(keys, cities):
+    route = keys_to_route(keys)
+    return route_length(route, cities)
 
 
 # ============================================================
-# TSP - ALGORYTMY
+# TSP - ADAPTACJE TYCH SAMYCH ALGORYTMÓW (RANDOM KEYS)
 # ============================================================
-def run_dpso_tsp(
-    cities,
-    num=50,
-    iterations=100,
-    inertia_keep=0.6,
-    c1=0.8,
-    c2=0.9,
-):
+def run_tsp_via_random_keys(base_algorithm_name, cities, num=50, iterations=100, **kwargs):
     n = len(cities)
 
-    particles = [random_route(n) for _ in range(num)]
-    velocities = [[] for _ in range(num)]
+    def tsp_cost(keys):
+        return route_cost_from_keys(keys, cities)
 
-    pbest_positions = [p.copy() for p in particles]
-    pbest_costs = [route_length(p, cities) for p in particles]
+    result = run_continuous_algorithm(
+        base_algorithm_name,
+        tsp_cost,
+        num=num,
+        iterations=iterations,
+        dim=n,
+        bounds=(0.0, 1.0),
+        **kwargs,
+    )
 
-    best_idx = int(np.argmin(pbest_costs))
-    gbest_position = pbest_positions[best_idx].copy()
-    gbest_cost = float(pbest_costs[best_idx])
-
-    history_best = []
-
-    for _ in range(iterations):
-        for i in range(num):
-            current = particles[i]
-
-            inertia_part = sample_swaps(velocities[i], inertia_keep)
-
-            cognitive_full = permutation_to_swaps(current, pbest_positions[i])
-            cognitive_part = sample_swaps(cognitive_full, c1)
-
-            social_full = permutation_to_swaps(current, gbest_position)
-            social_part = sample_swaps(social_full, c2)
-
-            new_velocity = inertia_part + cognitive_part + social_part
-            new_position = apply_swaps(current, new_velocity)
-
-            new_cost = route_length(new_position, cities)
-
-            particles[i] = new_position
-            velocities[i] = new_velocity
-
-            if new_cost < pbest_costs[i]:
-                pbest_costs[i] = new_cost
-                pbest_positions[i] = new_position.copy()
-
-        best_idx = int(np.argmin(pbest_costs))
-        if pbest_costs[best_idx] < gbest_cost:
-            gbest_cost = float(pbest_costs[best_idx])
-            gbest_position = pbest_positions[best_idx].copy()
-
-        history_best.append(gbest_cost)
+    best_keys = result["best_position"].copy()
+    best_route = keys_to_route(best_keys)
+    best_cost = route_length(best_route, cities)
+    history_best = [state["best_cost"] for state in result["history"]]
 
     return {
-        "best_route": gbest_position,
-        "best_cost": float(gbest_cost),
-        "history_best": history_best,
-    }
-
-
-def construct_ant_route(pheromone, distances, alpha, beta, start_city=None):
-    n = pheromone.shape[0]
-
-    if start_city is None:
-        current = np.random.randint(n)
-    else:
-        current = int(start_city)
-
-    unvisited = set(range(n))
-    unvisited.remove(current)
-    route = [current]
-
-    while unvisited:
-        candidates = list(unvisited)
-        probs = []
-
-        for j in candidates:
-            tau = pheromone[current, j] ** alpha
-            eta = (1.0 / (distances[current, j] + 1e-12)) ** beta
-            probs.append(tau * eta)
-
-        probs = np.array(probs, dtype=float)
-        s = probs.sum()
-
-        if s <= 0 or not np.isfinite(s):
-            next_city = np.random.choice(candidates)
-        else:
-            probs /= s
-            next_city = np.random.choice(candidates, p=probs)
-
-        route.append(next_city)
-        unvisited.remove(next_city)
-        current = next_city
-
-    return np.array(route, dtype=int)
-
-
-def run_aco_tsp(
-    cities,
-    num=50,
-    iterations=100,
-    alpha=1.0,
-    beta=3.0,
-    evaporation=0.5,
-    q=100.0,
-):
-    n = len(cities)
-    distances = pairwise_distances(cities)
-    pheromone = np.ones((n, n), dtype=float)
-
-    best_route = None
-    best_cost = np.inf
-    history_best = []
-
-    for _ in range(iterations):
-        all_routes = []
-        all_costs = []
-
-        for _ant in range(num):
-            route = construct_ant_route(pheromone, distances, alpha=alpha, beta=beta)
-            cost = route_length(route, cities)
-
-            all_routes.append(route)
-            all_costs.append(cost)
-
-            if cost < best_cost:
-                best_cost = float(cost)
-                best_route = route.copy()
-
-        pheromone *= (1.0 - evaporation)
-        pheromone = np.maximum(pheromone, 1e-12)
-
-        for route, cost in zip(all_routes, all_costs):
-            deposit = q / (cost + 1e-12)
-            for i in range(n):
-                a = route[i]
-                b = route[(i + 1) % n]
-                pheromone[a, b] += deposit
-                pheromone[b, a] += deposit
-
-        history_best.append(best_cost)
-
-    return {
-        "best_route": best_route,
+        "best_keys": best_keys,
+        "best_route": best_route.copy(),
         "best_cost": float(best_cost),
         "history_best": history_best,
+        "history_continuous": result["history"],
     }
+
+
+def run_pso_tsp(cities, num=50, iterations=100, w=0.7, c1=1.5, c2=1.5):
+    return run_tsp_via_random_keys(
+        "pso",
+        cities,
+        num=num,
+        iterations=iterations,
+        w=w,
+        c1=c1,
+        c2=c2,
+    )
+
+
+def run_gwo_tsp(cities, num=50, iterations=100):
+    return run_tsp_via_random_keys(
+        "gwo",
+        cities,
+        num=num,
+        iterations=iterations,
+    )
+
+
+def run_scso_tsp(cities, num=50, iterations=100):
+    return run_tsp_via_random_keys(
+        "scso",
+        cities,
+        num=num,
+        iterations=iterations,
+    )
+
+
+def run_bso_tsp(cities, num=50, iterations=100, k_clusters=5, p_replace=0.1):
+    return run_tsp_via_random_keys(
+        "bso",
+        cities,
+        num=num,
+        iterations=iterations,
+        k_clusters=k_clusters,
+        p_replace=p_replace,
+    )
 
 # ALGORYTM GENETYCZNY
 
@@ -1106,6 +964,10 @@ TSP_ALGORITHMS = {
     "dpso_tsp": run_dpso_tsp,
     "aco_tsp": run_aco_tsp,
     "ga_tsp": run_ga_tsp,
+    "pso_tsp": run_pso_tsp,
+    "gwo_tsp": run_gwo_tsp,
+    "scso_tsp": run_scso_tsp,
+    "bso_tsp": run_bso_tsp,
 }
 
 
@@ -1138,14 +1000,8 @@ def get_continuous_extra_params(algorithm_name):
 
 
 def get_tsp_extra_params(algorithm_name):
-    key = algorithm_name.lower()
-
-    if key == "dpso_tsp":
-        return {"inertia_keep": 0.6, "c1": 0.8, "c2": 0.9}
-    if key == "aco_tsp":
-        return {"alpha": 1.0, "beta": 3.0, "evaporation": 0.5, "q": 100.0}
-
-    return {}
+    key = algorithm_name.lower().replace("_tsp", "")
+    return get_continuous_extra_params(key)
 
 
 # ============================================================
@@ -1392,11 +1248,17 @@ def run_demo_tsp():
     cities = generate_cities(20, seed=2026)
     save_cities_csv(cities, os.path.join(RESULTS_DIR, "demo_tsp_20_cities.csv"))
 
-    np.random.seed(42)
-    dpso_result = run_tsp_algorithm("dpso_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("dpso_tsp"))
+    histories = {}
 
-    np.random.seed(42)
-    aco_result = run_tsp_algorithm("aco_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("aco_tsp"))
+    for algorithm_name in ["pso_tsp", "gwo_tsp", "scso_tsp", "bso_tsp"]:
+        np.random.seed(42)
+        result = run_tsp_algorithm(
+            algorithm_name,
+            cities,
+            num=50,
+            iterations=100,
+            **get_tsp_extra_params(algorithm_name),
+        )
 
     np.random.seed(42)
     ga_result = run_tsp_algorithm("ga_tsp", cities, num=50, iterations=100, **get_tsp_extra_params("ga_tsp"))
@@ -1407,13 +1269,14 @@ def run_demo_tsp():
         title=f"DPSO TSP, best={dpso_result['best_cost']:.3f}",
         save_path=os.path.join(RESULTS_DIR, "demo_dpso_tsp_route.png"),
     )
+        histories[algorithm_name] = result["history_best"]
 
-    plot_tsp_route(
-        cities,
-        aco_result["best_route"],
-        title=f"ACO TSP, best={aco_result['best_cost']:.3f}",
-        save_path=os.path.join(RESULTS_DIR, "demo_aco_tsp_route.png"),
-    )
+        plot_tsp_route(
+            cities,
+            result["best_route"],
+            title=f"{algorithm_name}, best={result['best_cost']:.3f}",
+            save_path=os.path.join(RESULTS_DIR, f"demo_{algorithm_name}_route.png"),
+        )
 
     plot_tsp_route(
         cities,
@@ -1428,6 +1291,7 @@ def run_demo_tsp():
             "aco_tsp": aco_result["history_best"],
             "ga_tsp": ga_result["history_best"],
         },
+        histories,
         title="Porównanie zbieżności TSP",
         save_path=os.path.join(RESULTS_DIR, "demo_tsp_convergence.png"),
     )
@@ -1498,7 +1362,7 @@ if __name__ == "__main__":
             )
 
         tsp_rows = benchmark_tsp_parameter_sweep(
-            algorithm_names=["dpso_tsp", "aco_tsp"],
+            algorithm_names=["pso_tsp", "gwo_tsp", "scso_tsp", "bso_tsp"],
             shared_instances=shared_instances,
             city_values=CITY_VALUES,
             agent_values=AGENT_VALUES,
@@ -1513,46 +1377,31 @@ if __name__ == "__main__":
         print("\nZapisano benchmark TSP do pliku: benchmark_tsp_results.csv")
 
         demo_cities = shared_instances[20][0]
+        tsp_histories = {}
 
-        np.random.seed(42)
-        dpso_demo = run_tsp_algorithm(
-            "dpso_tsp",
-            demo_cities,
-            num=50,
-            iterations=100,
-            **get_tsp_extra_params("dpso_tsp"),
-        )
+        for algorithm_name in ["pso_tsp", "gwo_tsp", "scso_tsp", "bso_tsp"]:
+            np.random.seed(42)
+            result = run_tsp_algorithm(
+                algorithm_name,
+                demo_cities,
+                num=50,
+                iterations=100,
+                **get_tsp_extra_params(algorithm_name),
+            )
 
-        np.random.seed(42)
-        aco_demo = run_tsp_algorithm(
-            "aco_tsp",
-            demo_cities,
-            num=50,
-            iterations=100,
-            **get_tsp_extra_params("aco_tsp"),
-        )
+            tsp_histories[algorithm_name] = result["history_best"]
+
+            plot_tsp_route(
+                demo_cities,
+                result["best_route"],
+                title=f"{algorithm_name}, 20 miast, best={result['best_cost']:.3f}",
+                save_path=os.path.join(RESULTS_DIR, f"route_{algorithm_name}_20cities.png"),
+            )
 
         plot_tsp_convergence(
-            {
-                "dpso_tsp": dpso_demo["history_best"],
-                "aco_tsp": aco_demo["history_best"],
-            },
+            tsp_histories,
             title="Porównanie zbieżności TSP (20 miast)",
             save_path=os.path.join(RESULTS_DIR, "compare_tsp_20cities.png"),
-        )
-
-        plot_tsp_route(
-            demo_cities,
-            dpso_demo["best_route"],
-            title=f"DPSO TSP, 20 miast, best={dpso_demo['best_cost']:.3f}",
-            save_path=os.path.join(RESULTS_DIR, "route_dpso_20cities.png"),
-        )
-
-        plot_tsp_route(
-            demo_cities,
-            aco_demo["best_route"],
-            title=f"ACO TSP, 20 miast, best={aco_demo['best_cost']:.3f}",
-            save_path=os.path.join(RESULTS_DIR, "route_aco_20cities.png"),
         )
 
     print("\nGotowe.")
