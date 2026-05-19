@@ -1,0 +1,6 @@
+path: /home/johny/Desktop/algorytmy_genetyczne/lab03
+train: train/images
+val: valid/images
+test: test/images
+nc: 5
+names: ['boat', 'buoy', 'jetski', 'life_saving_appliances', 'swimmer']
