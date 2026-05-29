@@ -1,0 +1,18 @@
+# Datasets (downloaded separately, large)
+lab03/train/
+lab03/test/
+lab03/valid/
+*.zip
+
+# Model weights
+*.pt
+*.pth
+
+# Generated media / outputs
+*.gif
+results/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
