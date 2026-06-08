@@ -51,6 +51,12 @@ GA_KWARGS = dict(
     seed=SEED,
 )
 
+# Wagi czlonu realizmu w ocenie GA (przeciw "oszukiwaniu" klasyfikatora):
+#   GA_W_REAL  -- nagroda za realizm wg dyskryminatora (wymaga discriminator.pt)
+#   GA_W_PRIOR -- kara za odejscie wektora z od rozkladu N(0,1)
+GA_W_REAL = 1.5
+GA_W_PRIOR = 0.05
+
 
 def main():
     print(f"=== Lab04: GAN + GA (urzadzenie: {DEVICE}) ===")
@@ -66,7 +72,8 @@ def main():
 
     if RUN_GA:
         print("\n--- Etap 3: algorytm genetyczny w przestrzeni latentnej ---")
-        evolve_class(TARGET_CLASS, device=DEVICE, **GA_KWARGS)
+        evolve_class(TARGET_CLASS, device=DEVICE,
+                     w_real=GA_W_REAL, w_prior=GA_W_PRIOR, **GA_KWARGS)
 
     print("\n=== Gotowe. Wyniki w lab04/results/ ===")
 

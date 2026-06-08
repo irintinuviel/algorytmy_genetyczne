@@ -18,6 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(HERE, "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 G_WEIGHTS_PATH = os.path.join(RESULTS_DIR, "generator.pt")
+D_WEIGHTS_PATH = os.path.join(RESULTS_DIR, "discriminator.pt")
 
 LATENT_DIM = 100   # wymiar wektora z (chromosom dla GA)
 NGF = 64           # bazowa liczba filtrow generatora
@@ -131,7 +132,9 @@ def train_gan(epochs=30, lr=2e-4, beta1=0.5, batch_size=128,
             _save_samples(netG, fixed_noise, epoch)
 
     torch.save(netG.state_dict(), G_WEIGHTS_PATH)
+    torch.save(netD.state_dict(), D_WEIGHTS_PATH)
     print(f"[gan] zapisano generator -> {G_WEIGHTS_PATH}")
+    print(f"[gan] zapisano dyskryminator -> {D_WEIGHTS_PATH}")
     return netG
 
 
@@ -153,6 +156,22 @@ def load_generator(device="cpu"):
     for p in netG.parameters():
         p.requires_grad_(False)
     return netG
+
+
+def load_discriminator(device="cpu"):
+    """Wczytuje zamrozony dyskryminator (czlon realizmu w ocenie GA).
+
+    Zwraca None, jesli wagi nie istnieja (np. GAN trenowany przed dodaniem
+    zapisu D) -- GA dziala wtedy bez czlonu realizmu opartego o D.
+    """
+    if not os.path.exists(D_WEIGHTS_PATH):
+        return None
+    netD = Discriminator().to(device)
+    netD.load_state_dict(torch.load(D_WEIGHTS_PATH, map_location=device))
+    netD.eval()
+    for p in netD.parameters():
+        p.requires_grad_(False)
+    return netD
 
 
 if __name__ == "__main__":

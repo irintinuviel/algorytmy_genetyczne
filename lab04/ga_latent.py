@@ -23,7 +23,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from gan import load_generator, LATENT_DIM
+from gan import load_generator, load_discriminator, LATENT_DIM
 from classifier import load_classifier
 from data import CLASSES
 
@@ -72,21 +72,45 @@ def mutation_gaussian(x, bounds, rate=0.1, sigma=0.3):
 # FUNKCJA OCENY (wsadowa, przez G i klasyfikator)
 # ============================================================
 class LatentFitness:
-    """Ocena populacji wektorow z: -P(klasa docelowa) dla G(z)."""
+    """Ocena populacji wektorow z dla G(z), z czlonem realizmu.
 
-    def __init__(self, generator, classifier, target_class, device="cpu"):
+    Koszt (GA minimalizuje):
+        -P(klasa docelowa)             nagroda za zgodnosc z klasa
+        -w_real * sigmoid(D(G(z)))     nagroda za realizm wg dyskryminatora
+        +w_prior * mean(z^2)           kara za odejscie od rozkladu N(0,1)
+
+    Bez czlonu realizmu GA "oszukuje" klasyfikator: znajduje z dajace P=1.0,
+    ale obraz to zdegenerowana plama. Czlon D + prior trzymaja z w obszarze,
+    z ktorego generator robi realistyczne obrazy.
+    """
+
+    def __init__(self, generator, classifier, target_class, device="cpu",
+                 discriminator=None, w_real=0.0, w_prior=0.0):
         self.G = generator
         self.C = classifier
+        self.D = discriminator
         self.target = target_class
         self.device = device
+        self.w_real = w_real
+        self.w_prior = w_prior
 
     @torch.no_grad()
     def __call__(self, pop):
         z = torch.from_numpy(np.asarray(pop, dtype=np.float32)).to(self.device)
         imgs = self.G(z)
         probs = F.softmax(self.C(imgs), dim=1)[:, self.target]
-        # GA minimalizuje -> zwracamy ujemne prawdopodobienstwo
-        return (-probs).cpu().numpy()
+        cost = -probs  # chcemy wysokie P(klasa)
+
+        if self.D is not None and self.w_real > 0:
+            real = torch.sigmoid(self.D(imgs))  # ~1 = realistyczny wg D
+            cost = cost - self.w_real * real
+
+        if self.w_prior > 0:
+            prior = (z.view(z.size(0), -1) ** 2).mean(dim=1)  # ~1 dla N(0,1)
+            cost = cost + self.w_prior * prior
+
+        # GA minimalizuje -> zwracamy koszt
+        return cost.cpu().numpy()
 
 
 # ============================================================
@@ -158,48 +182,83 @@ def run_ga_latent(
         history_best.append(best_cost)
         history_mean.append(float(fitness.mean()))
         if it % 10 == 0 or it == iterations:
-            print(f"[ga] iter {it}/{iterations}  best P(klasa)={-best_cost:.4f}  "
-                  f"mean P={-np.mean(fitness):.4f}")
+            print(f"[ga] iter {it}/{iterations}  best koszt={best_cost:.4f}  "
+                  f"mean koszt={np.mean(fitness):.4f}")
 
-    return best, -best_cost, history_best, history_mean
+    return best, best_cost, history_best, history_mean, pop, fitness
 
 
 # ============================================================
 # URUCHOMIENIE: ewolucja z dla zadanej klasy + zapis wynikow
 # ============================================================
-def evolve_class(target_name, device="cpu", **ga_kwargs):
+def _topk_distinct(pop, fitness, k=8, min_dist=1e-3):
+    """k najlepszych (najnizszy koszt) wzajemnie roznych osobnikow.
+
+    Po zbieznosci populacja bywa niemal identyczna; bierzemy zachlannie
+    kolejnych najlepszych, ktorzy roznia sie od juz wybranych o min_dist.
+    Jesli roznych jest mniej niz k, dobieramy najlepszych pozostalych.
+    """
+    order = np.argsort(fitness)
+    chosen = []
+    for i in order:
+        cand = pop[i]
+        if all(np.linalg.norm(cand - pop[j]) > min_dist for j in chosen):
+            chosen.append(i)
+        if len(chosen) == k:
+            break
+    for i in order:  # uzupelnienie, jesli za malo roznych
+        if len(chosen) == k:
+            break
+        if i not in chosen:
+            chosen.append(i)
+    return pop[chosen[:k]]
+
+
+def evolve_class(target_name, device="cpu", w_real=0.5, w_prior=0.05, **ga_kwargs):
     assert target_name in CLASSES, f"Nieznana klasa: {target_name}"
     target = CLASSES.index(target_name)
 
     G = load_generator(device)
     C = load_classifier(device)
-    fit = LatentFitness(G, C, target, device=device)
+    D = load_discriminator(device)
+    if D is None and w_real > 0:
+        print("[ga] UWAGA: brak discriminator.pt -- czlon realizmu (D) wylaczony. "
+              "Przetrenuj GAN (TRAIN_GAN=True), aby zapisac dyskryminator.")
+    fit = LatentFitness(G, C, target, device=device,
+                        discriminator=D, w_real=w_real, w_prior=w_prior)
 
     print(f"[ga] ewolucja wektora latentnego dla klasy '{target_name}' (idx {target})")
-    best_z, best_p, hist_best, hist_mean = run_ga_latent(fit, **ga_kwargs)
+    best_z, best_cost, hist_best, hist_mean, final_pop, final_fit = run_ga_latent(
+        fit, **ga_kwargs)
 
-    # Obraz najlepszego osobnika
+    # Obraz najlepszego osobnika + jego prawdziwe P(klasa) wg klasyfikatora
     with torch.no_grad():
         z = torch.from_numpy(best_z.astype(np.float32)).unsqueeze(0).to(device)
         img = G(z).cpu()
+        best_p = F.softmax(C(G(z)), dim=1)[0, target].item()
     img_path = os.path.join(RESULTS_DIR, f"ga_best_{target_name}.png")
     vutils.save_image(img, img_path, normalize=True)
 
-    # Porownanie: losowe z vs wyewoluowane z
+    # Porownanie: losowe z (gora) vs 8 NAJLEPSZYCH ROZNYCH osobnikow (dol).
+    # Wczesniej dol byl jednym obrazem powielonym 8x -- stad wrazenie, ze
+    # "wszystkie sa takie same". Teraz pokazujemy faktyczna roznorodnosc
+    # koncowej populacji.
+    top_z = _topk_distinct(final_pop, final_fit, k=8)
     with torch.no_grad():
         rand_z = torch.randn(8, LATENT_DIM, device=device)
         rand_imgs = G(rand_z).cpu()
         rand_probs = F.softmax(C(G(rand_z)), dim=1)[:, target].mean().item()
+        evo_imgs = G(torch.from_numpy(top_z.astype(np.float32)).to(device)).cpu()
     cmp_path = os.path.join(RESULTS_DIR, f"ga_compare_{target_name}.png")
-    grid = torch.cat([rand_imgs, img.repeat(8, 1, 1, 1)], dim=0)
+    grid = torch.cat([rand_imgs, evo_imgs], dim=0)
     vutils.save_image(grid, cmp_path, normalize=True, nrow=8)
 
-    # Krzywa zbieznosci (jako prawdopodobienstwo, czyli -fitness)
+    # Krzywa zbieznosci celu GA (-koszt: P(klasa) + realizm - kara prior)
     plt.figure(figsize=(7, 4))
-    plt.plot([-c for c in hist_best], label="najlepszy P(klasa)")
-    plt.plot([-m for m in hist_mean], label="srednie P(klasa)")
+    plt.plot([-c for c in hist_best], label="najlepszy (-koszt)")
+    plt.plot([-m for m in hist_mean], label="sredni (-koszt)")
     plt.xlabel("pokolenie")
-    plt.ylabel(f"P(klasa = {target_name})")
+    plt.ylabel("cel GA  (-koszt)")
     plt.title(f"Zbieznosc GA w przestrzeni latentnej -> {target_name}")
     plt.legend()
     plt.grid(True, alpha=0.3)

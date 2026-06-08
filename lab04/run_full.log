@@ -1,0 +1,70 @@
+=== Lab04: GAN + GA (urzadzenie: cpu) ===
+
+--- Etap 1: trening klasyfikatora ---
+[classifier] epoka 1/8  loss=0.8151  test_acc=0.6390
+[classifier] epoka 2/8  loss=0.4712  test_acc=0.7920
+[classifier] epoka 3/8  loss=0.3558  test_acc=0.8440
+[classifier] epoka 4/8  loss=0.2806  test_acc=0.8440
+[classifier] epoka 5/8  loss=0.2707  test_acc=0.8790
+[classifier] epoka 6/8  loss=0.2087  test_acc=0.9010
+[classifier] epoka 7/8  loss=0.1904  test_acc=0.9160
+[classifier] epoka 8/8  loss=0.1502  test_acc=0.9010
+[classifier] zapisano wagi -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/classifier.pt
+
+--- Etap 2: trening DCGAN ---
+[gan] obrazow treningowych: 5000
+[gan] epoka 1/30  loss_D=1.9625  loss_G=15.5349
+[gan] epoka 2/30  loss_D=1.0349  loss_G=10.3997
+[gan] epoka 3/30  loss_D=0.1898  loss_G=5.7214
+[gan] epoka 4/30  loss_D=0.1718  loss_G=6.5815
+[gan] epoka 5/30  loss_D=0.2518  loss_G=6.3183
+[gan]   probki -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/gan_samples_epoch005.png
+[gan] epoka 6/30  loss_D=0.2192  loss_G=5.6323
+[gan] epoka 7/30  loss_D=0.3095  loss_G=3.5753
+[gan] epoka 8/30  loss_D=0.3963  loss_G=8.1268
+[gan] epoka 9/30  loss_D=0.3312  loss_G=2.9686
+[gan] epoka 10/30  loss_D=0.3462  loss_G=4.5899
+[gan]   probki -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/gan_samples_epoch010.png
+[gan] epoka 11/30  loss_D=0.6249  loss_G=5.8786
+[gan] epoka 12/30  loss_D=0.9116  loss_G=1.4088
+[gan] epoka 13/30  loss_D=0.2978  loss_G=4.0152
+[gan] epoka 14/30  loss_D=0.4460  loss_G=1.6692
+[gan] epoka 15/30  loss_D=0.4239  loss_G=6.1272
+[gan]   probki -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/gan_samples_epoch015.png
+[gan] epoka 16/30  loss_D=0.5697  loss_G=5.7232
+[gan] epoka 17/30  loss_D=0.9890  loss_G=3.3920
+[gan] epoka 18/30  loss_D=0.4414  loss_G=4.3687
+[gan] epoka 19/30  loss_D=1.1155  loss_G=1.5020
+[gan] epoka 20/30  loss_D=0.5151  loss_G=4.6220
+[gan]   probki -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/gan_samples_epoch020.png
+[gan] epoka 21/30  loss_D=0.3827  loss_G=3.1607
+[gan] epoka 22/30  loss_D=0.4332  loss_G=2.2968
+[gan] epoka 23/30  loss_D=0.5310  loss_G=1.7077
+[gan] epoka 24/30  loss_D=0.6433  loss_G=1.5236
+[gan] epoka 25/30  loss_D=0.2982  loss_G=3.2709
+[gan]   probki -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/gan_samples_epoch025.png
+[gan] epoka 26/30  loss_D=0.6035  loss_G=1.7826
+[gan] epoka 27/30  loss_D=0.4157  loss_G=2.4747
+[gan] epoka 28/30  loss_D=0.6537  loss_G=1.4406
+[gan] epoka 29/30  loss_D=0.2566  loss_G=3.8047
+[gan] epoka 30/30  loss_D=0.4234  loss_G=3.9338
+[gan]   probki -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/gan_samples_epoch030.png
+[gan] zapisano generator -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/generator.pt
+[gan] zapisano dyskryminator -> /home/johny/Desktop/algorytmy_genetyczne/lab04/results/discriminator.pt
+
+--- Etap 3: algorytm genetyczny w przestrzeni latentnej ---
+[ga] ewolucja wektora latentnego dla klasy 'glioma' (idx 0)
+[ga] iter 10/80  best koszt=-1.0839  mean koszt=-1.0415
+[ga] iter 20/80  best koszt=-1.1737  mean koszt=-1.1231
+[ga] iter 30/80  best koszt=-1.2352  mean koszt=-1.1668
+[ga] iter 40/80  best koszt=-1.2889  mean koszt=-1.2350
+[ga] iter 50/80  best koszt=-1.3142  mean koszt=-1.2766
+[ga] iter 60/80  best koszt=-1.3356  mean koszt=-1.2940
+[ga] iter 70/80  best koszt=-1.3485  mean koszt=-1.3082
+[ga] iter 80/80  best koszt=-1.3717  mean koszt=-1.3290
+[ga] wyewoluowane P(klasa=glioma) = 0.9836 (losowe z: 0.1772)
+[ga] zapisano: /home/johny/Desktop/algorytmy_genetyczne/lab04/results/ga_best_glioma.png
+          /home/johny/Desktop/algorytmy_genetyczne/lab04/results/ga_compare_glioma.png
+          /home/johny/Desktop/algorytmy_genetyczne/lab04/results/ga_curve_glioma.png
+
+=== Gotowe. Wyniki w lab04/results/ ===
